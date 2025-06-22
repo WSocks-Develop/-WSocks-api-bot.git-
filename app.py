@@ -126,7 +126,7 @@ async def get_subscriptions(tg_id: int):
                 "email": sub['email'],
                 "panel": sub['panel'],
                 "expiry_date": sub['expiry_date'],
-                "is_expired": datetime.now(timezone.utc) > datetime.strptime(sub['expiry_date'], "%Y-%m-%d %H:%M:%S")
+                "is_expired": sub['is_expired']
             })
         logger.info(f"Subscriptions fetched: {formatted_subscriptions}")
         return {"subscriptions": formatted_subscriptions}
