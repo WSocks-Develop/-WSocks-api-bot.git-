@@ -3,19 +3,35 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 import aiosqlite
 from database import get_user, create_user, update_user_terms
-from xui_utils import get_active_subscriptions
-from xui_utils import get_best_panel, get_api_by_name
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions
 import config as cfg
 import hmac
 import hashlib
 import urllib.parse
 import logging
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://wsocks-mini-app.onrender.com", "https://telegram.org"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Корневой маршрут для проверки работоспособности
+@app.get("/")
+async def root():
+    logger.info("Root endpoint accessed")
+    return {"status": "WSocks VPN API is running"}
 
 
 class AuthData(BaseModel):
