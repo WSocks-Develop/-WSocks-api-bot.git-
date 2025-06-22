@@ -44,8 +44,15 @@ def verify_init_data(init_data: str) -> dict:
     Возвращает словарь с данными пользователя или вызывает исключение.
     """
     try:
+        if not init_data:
+            raise HTTPException(status_code=400, detail="init_data is empty")
+
         parsed_data = dict(urllib.parse.parse_qsl(init_data))
+        logger.info(f"Parsed init_data: {parsed_data}")
         received_hash = parsed_data.pop('hash', None)
+        if not received_hash:
+            raise HTTPException(status_code=400, detail="Hash not found in init_data")
+
         data_check_string = '\n'.join(f'{k}={v}' for k, v in sorted(parsed_data.items()))
         secret_key = hashlib.sha256(cfg.API_TOKEN.encode()).digest()
         computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
@@ -54,7 +61,15 @@ def verify_init_data(init_data: str) -> dict:
             raise HTTPException(status_code=401, detail="Недействительные данные авторизации")
 
         user_data = urllib.parse.parse_qs(init_data).get('user', [''])[0]
-        return {'user': eval(user_data)}  # Преобразуем JSON-строку в словарь
+        if not user_data:
+            raise HTTPException(status_code=400, detail="User data not found in init_data")
+
+        try:
+            return {'user': eval(user_data)}  # Преобразуем JSON-строку в словарь
+        except:
+            raise HTTPException(status_code=400, detail="Invalid user data format")
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Ошибка проверки initData: {e}")
         raise HTTPException(status_code=400, detail=f"Ошибка обработки initData: {str(e)}")
@@ -63,20 +78,24 @@ def verify_init_data(init_data: str) -> dict:
 @app.post("/api/auth")
 async def auth(data: AuthData):
     logger.info(f"Received init_data: {data.init_data}")
-    user_data = verify_init_data(data.init_data)
-    tg_id = user_data['user']['id']
-    user = await get_user(tg_id)
-
-    if not user:
-        await create_user(tg_id)
+    try:
+        user_data = verify_init_data(data.init_data)
+        tg_id = user_data['user']['id']
         user = await get_user(tg_id)
 
-    if not user['accepted_terms']:
-        await update_user_terms(tg_id, True)  # Автоматическое принятие условий для прототипа
-        user['accepted_terms'] = True
+        if not user:
+            await create_user(tg_id)
+            user = await get_user(tg_id)
 
-    logger.info(f"Authenticated user: {tg_id}")
-    return {"user": {"telegram_id": tg_id, "first_name": user_data['user'].get('first_name', '')}}
+        if not user['accepted_terms']:
+            await update_user_terms(tg_id, True)  # Автоматическое принятие условий для прототипа
+            user['accepted_terms'] = True
+
+        logger.info(f"Authenticated user: {tg_id}")
+        return {"user": {"telegram_id": tg_id, "first_name": user_data['user'].get('first_name', '')}}
+    except Exception as e:
+        logger.error(f"Auth error: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка авторизации: {str(e)}")
 
 
 @app.get("/api/subscriptions")
