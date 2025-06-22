@@ -119,7 +119,7 @@ async def auth(data: AuthData):
 async def get_subscriptions(tg_id: int):
     logger.info(f"Fetching subscriptions for tg_id: {tg_id}")
     try:
-        subscriptions = await get_active_subscriptions(tg_id)
+        subscriptions = get_active_subscriptions(tg_id)
         formatted_subscriptions = []
         for sub in subscriptions:
             formatted_subscriptions.append({
