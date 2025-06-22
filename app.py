@@ -27,17 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Корневой маршрут для проверки работоспособности
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
     return {"status": "WSocks VPN API is running"}
 
-
 class AuthData(BaseModel):
     init_data: str
-
 
 def verify_init_data(init_data: str) -> dict:
     """
@@ -76,7 +73,6 @@ def verify_init_data(init_data: str) -> dict:
     except Exception as e:
         logger.error(f"Ошибка проверки initData: {e}")
         raise HTTPException(status_code=400, detail=f"Ошибка обработки initData: {str(e)}")
-
 
 @app.post("/api/auth")
 async def auth(data: AuthData):
@@ -118,7 +114,6 @@ async def auth(data: AuthData):
         logger.error(f"Unexpected auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error in auth: {str(e)}")
 
-
 @app.get("/api/subscriptions")
 async def get_subscriptions(tg_id: int):
     logger.info(f"Fetching subscriptions for tg_id: {tg_id}")
@@ -138,10 +133,12 @@ async def get_subscriptions(tg_id: int):
         logger.error(f"Ошибка получения подписок: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка получения подписок: {str(e)}")
 
-
-# Проверка базы данных при старте
+# Проверка базы данных и конфигурации при старте
 @app.on_event("startup")
 async def startup_event():
+    if not cfg.API_TOKEN:
+        logger.error("API_TOKEN is not set in config.py")
+        raise ValueError("API_TOKEN is not set")
     try:
         async with aiosqlite.connect("subscriptions.db") as conn:
             await conn.execute("""
@@ -163,3 +160,4 @@ async def startup_event():
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
+        raise e
