@@ -119,14 +119,14 @@ async def auth(data: AuthData):
 async def get_subscriptions(tg_id: int):
     logger.info(f"Fetching subscriptions for tg_id: {tg_id}")
     try:
-        subscriptions = get_active_subscriptions(tg_id)
+        subscriptions = await get_active_subscriptions(tg_id)
         formatted_subscriptions = []
         for sub in subscriptions:
             formatted_subscriptions.append({
                 "email": sub['email'],
                 "panel": sub['panel'],
-                "expiry_date": sub['expire'],
-                "is_expired": datetime.now(timezone.utc) > datetime.strptime(sub['expire'], "%Y-%m-%d %H:%M:%S")
+                "expiry_date": sub['expiry_date'],
+                "is_expired": datetime.now(timezone.utc) > datetime.strptime(sub['expiry_date'], "%Y-%m-%d %H:%M:%S")
             })
         logger.info(f"Subscriptions fetched: {formatted_subscriptions}")
         return {"subscriptions": formatted_subscriptions}
