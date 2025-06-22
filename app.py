@@ -50,9 +50,9 @@ def verify_init_data(init_data: str) -> dict:
         received_hash = parsed_data.pop('hash', None)
         if not received_hash:
             raise HTTPException(status_code=400, detail="Hash not found in init_data")
-
+        a = '7656992098:AAGEzWnvtytCNo-j8DkQTnxLMyObzzeRDJA'
         data_check_string = '\n'.join(f'{k}={v}' for k, v in sorted(parsed_data.items()))
-        secret_key = hashlib.sha256(cfg.API_TOKEN.encode()).digest()
+        secret_key = hashlib.sha256(a.encode()).digest()
         computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         logger.info(f"Computed hash: {computed_hash}, Received hash: {received_hash}")
 
