@@ -1,0 +1,19 @@
+2025-05-04 19:16:56,643 | INFO: Запуск агрегации подписок
+2025-05-04 19:16:57,320 | ERROR: Ошибка получения подписки https://de-2.wsocks.ru:2096/SubWSocks_VPN/: статус 404
+2025-05-04 19:16:57,714 | ERROR: Ошибка получения подписки https://de-3.wsocks.ru:2096/SubWSocks_VPN/: статус 404
+2025-05-04 19:16:57,714 | WARNING: Не удалось получить ни одного подключения
+2025-05-04 19:16:57,714 | ERROR: Агрегация не удалась
+2025-05-04 19:20:21,087 | INFO: Запуск агрегации подписок
+2025-05-04 19:20:21,323 | INFO: Получена подписка: https://de-2.wsocks.ru:2096/SubWSocks_VPN/hv7fhaxcntdfy0zo
+2025-05-04 19:20:21,571 | INFO: Получена подписка: https://de-3.wsocks.ru:2096/SubWSocks_VPN/hv7fhaxcntdfy0zo
+2025-05-04 19:20:21,572 | INFO: Добавлено подключение: Германия1
+2025-05-04 19:20:21,573 | INFO: Добавлено подключение: Германия2
+2025-05-04 19:20:21,573 | INFO: Подписка успешно агрегирована
+2025-05-04 19:20:21,574 | INFO: Итоговая ссылка: https://subnginx.wsocks.ru:2096/SubWSocks_VPN/dmxlc3M6Ly80MTczYjRmZC1iYjE4LTQ2YmEtYTQ0MS0xOGVhNTYzNWQ1ZTJAZGUtMi53c29ja3MucnU6NDQzP2Zsb3c9eHRscy1ycHJ4LXZpc2lvbiZmcD1jaHJvbWUmcGJrPWoyZzhXWG15c0VlakRyZXVydnBzX2hVTWJ2M0dUcTJXNkdvVjJVaGtQeHMmc2VjdXJpdHk9cmVhbGl0eSZzaWQ9ZGIwMzU5N2YwZTliNjUxYSZzbmk9ZGUtMi53c29ja3MucnUmc3B4PSUyRjAyZ2huMDRpWmhKRG4yUSZ0eXBlPXRjcCMlRDAlOTMlRDAlQjUlRDElODAlRDAlQkMlRDAlQjAlRDAlQkQlRDAlQjglRDElOEYxCnZsZXNzOi8vNjU5MjczNzAtYmY5Yi00YjIzLWI2ZTAtZjY1YzAwOWFkZTBmQGRlLTMud3NvY2tzLnJ1OjQ0Mz9mbG93PXh0bHMtcnByeC12aXNpb24mZnA9Y2hyb21lJnBiaz1NQ0VEc2p2cUJySkdMWGsteUpPc1N1NS1SSzhmTzdra0ZUX1JDX2dpTmdNJnNlY3VyaXR5PXJlYWxpdHkmc2lkPWJkOGM0NzY4OGMzZSZzbmk9d3d3Lmdvb2dsZS5jb20mc3B4PSUyRjM1amxheVZoRTZLRUgxWSZ0eXBlPXRjcCMlRDAlOTMlRDAlQjUlRDElODAlRDAlQkMlRDAlQjAlRDAlQkQlRDAlQjglRDElOEYy
+2025-05-04 20:04:34,302 | INFO: Запуск агрегации подписок
+2025-05-04 20:04:35,102 | INFO: Получена подписка: https://de-2.wsocks.ru:2096/SubWSocks_VPN/hv7fhaxcntdfy0zo
+2025-05-04 20:04:35,752 | INFO: Получена подписка: https://de-3.wsocks.ru:2096/SubWSocks_VPN/hv7fhaxcntdfy0zo
+2025-05-04 20:04:35,754 | INFO: Добавлено подключение: Германия1
+2025-05-04 20:04:35,755 | INFO: Добавлено подключение: Германия2
+2025-05-04 20:04:35,756 | INFO: Подписка успешно агрегирована
+2025-05-04 20:04:35,757 | INFO: Итоговая ссылка: https://subnginx2.wsocks.ru/SubWSocks_VPN/dmxlc3M6Ly80MTczYjRmZC1iYjE4LTQ2YmEtYTQ0MS0xOGVhNTYzNWQ1ZTJAZGUtMi53c29ja3MucnU6NDQzP2Zsb3c9eHRscy1ycHJ4LXZpc2lvbiZmcD1jaHJvbWUmcGJrPWoyZzhXWG15c0VlakRyZXVydnBzX2hVTWJ2M0dUcTJXNkdvVjJVaGtQeHMmc2VjdXJpdHk9cmVhbGl0eSZzaWQ9ZGM4ZjMxJnNuaT1kZS0yLndzb2Nrcy5ydSZzcHg9JTJGM29WM1AyZmtLczVaZkZ3JnR5cGU9dGNwIyVEMCU5MyVEMCVCNSVEMSU4MCVEMCVCQyVEMCVCMCVEMCVCRCVEMCVCOCVEMSU4RjEKdmxlc3M6Ly82NTkyNzM3MC1iZjliLTRiMjMtYjZlMC1mNjVjMDA5YWRlMGZAZGUtMy53c29ja3MucnU6NDQzP2Zsb3c9eHRscy1ycHJ4LXZpc2lvbiZmcD1jaHJvbWUmcGJrPU1DRURzanZxQnJKR0xYay15Sk9zU3U1LVJLOGZPN2trRlRfUkNfZ2lOZ00mc2VjdXJpdHk9cmVhbGl0eSZzaWQ9YjU2YmZhNmUzMWNlMzljZiZzbmk9Z29vZ2xlLmNvbSZzcHg9JTJGb0MwQVAzNG1vZ1NoYXNyJnR5cGU9dGNwIyVEMCU5MyVEMCVCNSVEMSU4MCVEMCVCQyVEMCVCMCVEMCVCRCVEMCVCOCVEMSU4RjI=
