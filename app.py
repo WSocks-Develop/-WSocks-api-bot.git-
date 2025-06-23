@@ -188,20 +188,24 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Проверяем подписку на панели
-        current_panel = get_best_panel()
-        if not current_panel:
-            raise HTTPException(status_code=500, detail="No available panels")
-        api = get_api_by_name(current_panel['name'])
+        # Проверяем подписку по tg_id и email
+        subscriptions = get_active_subscriptions(data.tg_id)
+        selected_sub = next((sub for sub in subscriptions if sub['email'] == data.email), None)
+        if not selected_sub:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        
+        # Используем панель из подписки
+        api = get_api_by_name(selected_sub['panel'])
         if not api:
             raise HTTPException(status_code=500, detail="Panel not available")
         
+        api.login()  # Повторная авторизация
         client = api.client.get_by_email(data.email.strip())
         logger.info(f"Client found on panel: {client}")
         if not client:
             raise HTTPException(status_code=404, detail="Subscription not found on panel")
         
-        panel_name = current_panel['name']
+        panel_name = selected_sub['panel']
         label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}-extend"
         payment_link = create_payment_link(amount, label)
         
@@ -252,10 +256,14 @@ async def confirm_payment(data: ConfirmPaymentData):
             if not api:
                 raise HTTPException(status_code=500, detail="Panel not available")
             
-            # Повторная авторизация для избежания потери соединения
-            api.login()
+            api.login()  # Повторная авторизация
             
             if is_extension:
+                subscriptions = get_active_subscriptions(data.tg_id)
+                selected_sub = next((sub for sub in subscriptions if sub['email'] == email), None)
+                if not selected_sub:
+                    raise HTTPException(status_code=404, detail="Subscription not found")
+                
                 client = api.client.get_by_email(email)
                 if not client:
                     raise HTTPException(status_code=404, detail="Client not found on panel")
@@ -269,7 +277,7 @@ async def confirm_payment(data: ConfirmPaymentData):
                 new_expiry_time = (current_expiry + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
                 new_expiry_timestamp = int(datetime.strptime(new_expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
                 
-                # Используем существующий client.id вместо перезаписи
+                # Используем client.id напрямую
                 extend_subscription(email, client.id, days, data.tg_id, client.sub_id, api)
                 
                 async with aiosqlite.connect(DB_PATH) as conn:
@@ -318,7 +326,7 @@ async def confirm_payment(data: ConfirmPaymentData):
             await conn.execute("DELETE FROM pending_payments WHERE tg_id = ? AND label = ?", (data.tg_id, data.label))
             await conn.commit()
             
-            current_panel = get_best_panel()
+            current_panel = get_best_panel() if not is_extension else {'name': panel_name, 'create_key': get_api_by_name(panel_name).create_key}
             if not current_panel:
                 raise HTTPException(status_code=500, detail="No available panels")
             subscription_key = current_panel["create_key"](client if is_extension else new_client)
