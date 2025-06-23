@@ -234,7 +234,10 @@ async def confirm_payment(data: ConfirmPaymentData):
             await conn.execute("DELETE FROM pending_payments WHERE tg_id = ? AND label = ?", (data.tg_id, data.label))
             await conn.commit()
             
-            subscription_key = get_best_panel()["create_key"](new_client)
+            current_panel = get_best_panel()
+            if not current_panel:
+                raise HTTPException(status_code=500, detail="No available panels")
+            subscription_key = current_panel["create_key"](new_client)
             logger.info(f"Subscription created: {email}")
             return {
                 "success": True,
@@ -247,6 +250,26 @@ async def confirm_payment(data: ConfirmPaymentData):
     except Exception as e:
         logger.error(f"Error confirming payment: {e}")
         raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
+
+@app.delete("/api/cancel-payment")
+async def cancel_payment(data: ConfirmPaymentData):
+    logger.info(f"Cancelling payment for tg_id: {data.tg_id}, label: {data.label}")
+    try:
+        async with aiosqlite.connect("subscriptions.db") as conn:
+            cursor = await conn.execute(
+                "DELETE FROM pending_payments WHERE tg_id = ? AND label = ?",
+                (data.tg_id, data.label)
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Pending payment not found")
+            await conn.commit()
+        logger.info(f"Payment cancelled: {data.label}")
+        return {"success": True}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error cancelling payment: {e}")
+        raise HTTPException(status_code=500, detail=f"Error cancelling payment: {str(e)}")
 
 @app.on_event("startup")
 async def startup_event():
