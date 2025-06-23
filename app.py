@@ -1,16 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import aiosqlite
 import json
-from database import get_user, create_user, update_user_terms
+import uuid
+import logging
+from database import get_user, create_user, update_user_terms, add_subscription_to_db, add_payment_to_db
 from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions
+from payments import create_payment_link, check_payment_status
 import config as cfg
 import hmac
 import hashlib
 import urllib.parse
-import logging
 from fastapi.middleware.cors import CORSMiddleware
+from py3xui import Client
 
 app = FastAPI()
 
@@ -27,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Корневой маршрут для проверки работоспособности
+# Корневой маршрут
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
@@ -36,36 +39,36 @@ async def root():
 class AuthData(BaseModel):
     init_data: str
 
+class BuySubscriptionData(BaseModel):
+    tg_id: int
+    days: int
+
+def generate_sub(length=16):
+    import string
+    import random
+    chars = string.ascii_lowercase + string.digits
+    return ''.join(random.choices(chars, k=length))
+
 def verify_init_data(init_data: str) -> dict:
-    """
-    Проверяет подлинность initData от Telegram Web Apps.
-    Возвращает словарь с данными пользователя или вызывает исключение.
-    """
     try:
         if not init_data:
             raise HTTPException(status_code=400, detail="init_data is empty")
-
         parsed_data = dict(urllib.parse.parse_qsl(init_data))
         logger.info(f"Parsed init_data: {parsed_data}")
         received_hash = parsed_data.pop('hash', None)
         if not received_hash:
             raise HTTPException(status_code=400, detail="Hash not found in init_data")
-
         data_check_string = '\n'.join(f'{k}={v}' for k, v in sorted(parsed_data.items()))
-        # Исправлено: Используем HMAC-SHA256 с ключом "WebAppData"
         secret_key = hmac.new("WebAppData".encode(), cfg.API_TOKEN.encode(), hashlib.sha256).digest()
         computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         logger.info(f"Computed hash: {computed_hash}, Received hash: {received_hash}")
-
         if computed_hash != received_hash:
             raise HTTPException(status_code=401, detail="Недействительные данные авторизации")
-
         user_data = urllib.parse.parse_qs(init_data).get('user', [''])[0]
         if not user_data:
             raise HTTPException(status_code=400, detail="User data not found in init_data")
-
         try:
-            return {'user': json.loads(user_data)}  # Безопасный парсинг JSON
+            return {'user': json.loads(user_data)}
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid user data format: {str(e)}")
@@ -87,7 +90,6 @@ async def auth(data: AuthData):
         except Exception as e:
             logger.error(f"Database error in get_user: {e}")
             raise HTTPException(status_code=500, detail=f"Database error in get_user: {str(e)}")
-
         if not user:
             logger.info(f"Creating new user: {tg_id}")
             try:
@@ -96,16 +98,14 @@ async def auth(data: AuthData):
             except Exception as e:
                 logger.error(f"Database error in create_user: {e}")
                 raise HTTPException(status_code=500, detail=f"Database error in create_user: {str(e)}")
-
         if not user['accepted_terms']:
             logger.info(f"Updating terms for user: {tg_id}")
             try:
-                await update_user_terms(tg_id, True)  # Автоматическое принятие условий
+                await update_user_terms(tg_id, True)
                 user['accepted_terms'] = True
             except Exception as e:
                 logger.error(f"Database error in update_user_terms: {e}")
                 raise HTTPException(status_code=500, detail=f"Database error in update_user_terms: {str(e)}")
-
         logger.info(f"Authenticated user: {tg_id}")
         return {"user": {"telegram_id": tg_id, "first_name": user_data['user'].get('first_name', '')}}
     except HTTPException as e:
@@ -125,7 +125,7 @@ async def get_subscriptions(tg_id: int):
             formatted_subscriptions.append({
                 "email": sub['email'],
                 "panel": sub['panel'],
-                "expiry_date": sub['expiry_date'],
+                "expiry_date": sub['expiry_date'].strftime("%Y-%m-%d %H:%M:%S"),
                 "is_expired": sub['is_expired']
             })
         logger.info(f"Subscriptions fetched: {formatted_subscriptions}")
@@ -134,7 +134,71 @@ async def get_subscriptions(tg_id: int):
         logger.error(f"Ошибка получения подписок: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка получения подписок: {str(e)}")
 
-# Проверка базы данных и конфигурации при старте
+@app.post("/api/buy-subscription")
+async def buy_subscription(data: BuySubscriptionData):
+    logger.info(f"Attempting to buy subscription for tg_id: {data.tg_id}, days: {data.days}")
+    try:
+        prices = {30: 89, 90: 249, 180: 449, 360: 849}
+        if data.days not in prices:
+            raise HTTPException(status_code=400, detail="Invalid subscription period")
+        amount = prices[data.days]
+        user = await get_user(data.tg_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        current_panel = get_best_panel()
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="No available panels")
+        api = get_api_by_name(current_panel['name'])
+        label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        payment_link = create_payment_link(amount, label)
+        email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        subscription_id = generate_sub(16)
+        expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
+        new_client = Client(
+            id=str(uuid.uuid4()),
+            enable=True,
+            tg_id=data.tg_id,
+            expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
+            flow="xtls-rprx-vision",
+            email=email,
+            sub_id=subscription_id,
+            limit_ip=5
+        )
+        # Сохраняем подписку и платёж в базе
+        await add_subscription_to_db(data.tg_id, email, current_panel['name'], expiry_time)
+        await add_payment_to_db(data.tg_id, label, "покупка", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), amount, email)
+        # Добавляем клиента на панель
+        api.client.add(1, [new_client])
+        subscription_key = current_panel["create_key"](new_client)
+        logger.info(f"Subscription created: {email}")
+        return {
+            "payment_link": payment_link,
+            "label": label,
+            "email": email,
+            "subscription_key": subscription_key,
+            "days": data.days,
+            "amount": amount
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error buying subscription: {e}")
+        raise HTTPException(status_code=500, detail=f"Error buying subscription: {str(e)}")
+
+@app.post("/api/confirm-payment")
+async def confirm_payment(data: BuySubscriptionData):
+    logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
+    try:
+        if check_payment_status(data.label):
+            return {"success": True}
+        else:
+            raise HTTPException(status_code=400, detail="Payment not confirmed")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error confirming payment: {e}")
+        raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
+
 @app.on_event("startup")
 async def startup_event():
     if not cfg.API_TOKEN:
