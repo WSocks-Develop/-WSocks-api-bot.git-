@@ -252,6 +252,9 @@ async def confirm_payment(data: ConfirmPaymentData):
             if not api:
                 raise HTTPException(status_code=500, detail="Panel not available")
             
+            # Повторная авторизация для избежания потери соединения
+            api.login()
+            
             if is_extension:
                 client = api.client.get_by_email(email)
                 if not client:
@@ -266,6 +269,7 @@ async def confirm_payment(data: ConfirmPaymentData):
                 new_expiry_time = (current_expiry + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
                 new_expiry_timestamp = int(datetime.strptime(new_expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
                 
+                # Используем существующий client.id вместо перезаписи
                 extend_subscription(email, client.id, days, data.tg_id, client.sub_id, api)
                 
                 async with aiosqlite.connect(DB_PATH) as conn:
