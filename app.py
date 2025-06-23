@@ -43,6 +43,10 @@ class BuySubscriptionData(BaseModel):
     tg_id: int
     days: int
 
+class ConfirmPaymentData(BaseModel):
+    tg_id: int
+    label: str
+
 def generate_sub(length=16):
     import string
     import random
@@ -148,51 +152,96 @@ async def buy_subscription(data: BuySubscriptionData):
         current_panel = get_best_panel()
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
-        api = get_api_by_name(current_panel['name'])
         label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
         payment_link = create_payment_link(amount, label)
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
-        subscription_id = generate_sub(16)
-        expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
-        new_client = Client(
-            id=str(uuid.uuid4()),
-            enable=True,
-            tg_id=data.tg_id,
-            expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
-            flow="xtls-rprx-vision",
-            email=email,
-            sub_id=subscription_id,
-            limit_ip=5
-        )
-        # Сохраняем подписку и платёж в базе
-        await add_subscription_to_db(data.tg_id, email, current_panel['name'], expiry_time)
-        await add_payment_to_db(data.tg_id, label, "покупка", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), amount, email)
-        # Добавляем клиента на панель
-        api.client.add(1, [new_client])
-        subscription_key = current_panel["create_key"](new_client)
-        logger.info(f"Subscription created: {email}")
+        
+        # Сохраняем временные данные в pending_payments
+        async with aiosqlite.connect("subscriptions.db") as conn:
+            await conn.execute("""
+                INSERT INTO pending_payments (tg_id, label, days, amount, email, panel_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data.tg_id, label, data.days, amount, email, current_panel['name'],
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            ))
+            await conn.commit()
+        
+        logger.info(f"Payment link created for: {email}, label: {label}")
         return {
             "payment_link": payment_link,
             "label": label,
             "email": email,
-            "subscription_key": subscription_key,
             "days": data.days,
             "amount": amount
         }
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error(f"Error buying subscription: {e}")
-        raise HTTPException(status_code=500, detail=f"Error buying subscription: {str(e)}")
+        logger.error(f"Error initiating subscription purchase: {e}")
+        raise HTTPException(status_code=500, detail=f"Error initiating subscription purchase: {str(e)}")
 
 @app.post("/api/confirm-payment")
-async def confirm_payment(data: BuySubscriptionData):
+async def confirm_payment(data: ConfirmPaymentData):
     logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
     try:
-        if check_payment_status(data.label):
-            return {"success": True}
-        else:
+        # Проверяем статус оплаты
+        if not check_payment_status(data.label):
             raise HTTPException(status_code=400, detail="Payment not confirmed")
+        
+        # Получаем данные из pending_payments
+        async with aiosqlite.connect("subscriptions.db") as conn:
+            cursor = await conn.execute("""
+                SELECT days, amount, email, panel_name
+                FROM pending_payments
+                WHERE tg_id = ? AND label = ?
+            """, (data.tg_id, data.label))
+            payment_data = await cursor.fetchone()
+            if not payment_data:
+                raise HTTPException(status_code=404, detail="Pending payment not found")
+            
+            days, amount, email, panel_name = payment_data
+            
+            # Создаём подписку
+            api = get_api_by_name(panel_name)
+            if not api:
+                raise HTTPException(status_code=500, detail="Panel not available")
+            
+            subscription_id = generate_sub(16)
+            expiry_time = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            new_client = Client(
+                id=str(uuid.uuid4()),
+                enable=True,
+                tg_id=data.tg_id,
+                expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
+                flow="xtls-rprx-vision",
+                email=email,
+                sub_id=subscription_id,
+                limit_ip=5
+            )
+            
+            # Добавляем клиента на панель
+            api.client.add(1, [new_client])
+            
+            # Сохраняем подписку и платёж в базе
+            await add_subscription_to_db(data.tg_id, email, panel_name, expiry_time)
+            await add_payment_to_db(
+                data.tg_id, data.label, "покупка",
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), amount, email
+            )
+            
+            # Удаляем запись из pending_payments
+            await conn.execute("DELETE FROM pending_payments WHERE tg_id = ? AND label = ?", (data.tg_id, data.label))
+            await conn.commit()
+            
+            subscription_key = get_best_panel()["create_key"](new_client)
+            logger.info(f"Subscription created: {email}")
+            return {
+                "success": True,
+                "email": email,
+                "subscription_key": subscription_key,
+                "expiry_date": expiry_time
+            }
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -219,6 +268,18 @@ async def startup_event():
                     email TEXT NOT NULL,
                     panel TEXT NOT NULL,
                     expire TEXT NOT NULL
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tg_id INTEGER,
+                    label TEXT NOT NULL,
+                    days INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    email TEXT NOT NULL,
+                    panel_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 )
             """)
             await conn.commit()
