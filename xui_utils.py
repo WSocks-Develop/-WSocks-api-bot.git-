@@ -14,7 +14,7 @@ PANELS = [
        "create_link": lambda client: (
            f"https://de-1.wsocks.ru:2096/SubWSocks_VPN_DE_FRA-1/{client.sub_id}"
        )
-     },
+     }
     # {
     #     "name": "Panel2",
     #     "api": Api(host=cfg.PANEL2_HOST, username=cfg.PANEL2_USERNAME, password=cfg.PANEL2_PASSWORD, token=cfg.PANEL2_TOKEN),
@@ -23,17 +23,17 @@ PANELS = [
     #         f"-R4V_XUgnbRlLLCtqri10dcdd1QLNEAU6B04LpRX3U&fp=chrome&sni=google.com&sid=5f&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
     #     )
     # },
-    {
-        "name": "Panel3",
-        "api": Api(host=cfg.PANEL3_HOST, username=cfg.PANEL3_USERNAME, password=cfg.PANEL3_PASSWORD, token=cfg.PANEL3_TOKEN),
-        "create_key": lambda client: (
-            f"vless://{client.id}@de-3.wsocks.ru:443?type=tcp&security=reality&pbk"
-            f"=MCEDsjvqBrJGLXk-yJOsSu5-RK8fO7kkFT_RC_giNgM&fp=chrome&sni=google.com&sid=8e&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
-        ),
-        "create_link": lambda client: (
-          f"https://de-3.wsocks.ru:2096/SubWSocks_VPN_DE_FRA-3/{client.sub_id}"
-      )
-    }
+    # {
+    #     "name": "Panel3",
+    #     "api": Api(host=cfg.PANEL3_HOST, username=cfg.PANEL3_USERNAME, password=cfg.PANEL3_PASSWORD, token=cfg.PANEL3_TOKEN),
+    #     "create_key": lambda client: (
+    #         f"vless://{client.id}@de-3.wsocks.ru:443?type=tcp&security=reality&pbk"
+    #         f"=MCEDsjvqBrJGLXk-yJOsSu5-RK8fO7kkFT_RC_giNgM&fp=chrome&sni=google.com&sid=8e&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
+    #     ),
+    #     "create_link": lambda client: (
+    #       f"https://de-3.wsocks.ru:2096/SubWSocks_VPN_DE_FRA-3/{client.sub_id}"
+    #   )
+    # }
 ]
 
 for panel in PANELS:
