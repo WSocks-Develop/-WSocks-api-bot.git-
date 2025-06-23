@@ -6,7 +6,7 @@ import json
 import uuid
 import logging
 from database import get_user, create_user, update_user_terms, add_subscription_to_db, add_payment_to_db
-from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription
 from payments import create_payment_link, check_payment_status
 import config as cfg
 import hmac
@@ -177,7 +177,7 @@ async def buy_subscription(data: BuySubscriptionData):
         raise HTTPException(status_code=500, detail=f"Error initiating subscription purchase: {str(e)}")
 
 @app.post("/api/extend-subscription")
-async def extend_subscription(data: ExtendSubscriptionData):
+async def extend_subscription_endpoint(data: ExtendSubscriptionData):
     logger.info(f"Attempting to extend subscription for tg_id: {data.tg_id}, email: {data.email}, days: {data.days}")
     try:
         prices = {30: 89, 90: 249, 180: 449, 360: 849}
@@ -189,15 +189,14 @@ async def extend_subscription(data: ExtendSubscriptionData):
             raise HTTPException(status_code=404, detail="User not found")
         
         # Проверяем подписку на панели
-        current_panel = get_best_panel()  # Предполагаем, что панель фиксирована
+        current_panel = get_best_panel()
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
         api = get_api_by_name(current_panel['name'])
         if not api:
             raise HTTPException(status_code=500, detail="Panel not available")
         
-        clients = api.client.list(1)
-        client = next((c for c in clients if c.email == data.email.strip()), None)
+        client = api.client.get_by_email(data.email.strip())
         logger.info(f"Client found on panel: {client}")
         if not client:
             raise HTTPException(status_code=404, detail="Subscription not found on panel")
@@ -254,12 +253,11 @@ async def confirm_payment(data: ConfirmPaymentData):
                 raise HTTPException(status_code=500, detail="Panel not available")
             
             if is_extension:
-                current_expiry = datetime.now(timezone.utc)
-                clients = api.client.list(1)
-                client = next((c for c in clients if c.email == email), None)
+                client = api.client.get_by_email(email)
                 if not client:
                     raise HTTPException(status_code=404, detail="Client not found on panel")
                 
+                current_expiry = datetime.now(timezone.utc)
                 if client.expiry_time:
                     expiry_dt = datetime.fromtimestamp(client.expiry_time / 1000, tz=timezone.utc)
                     if expiry_dt > current_expiry:
@@ -268,8 +266,7 @@ async def confirm_payment(data: ConfirmPaymentData):
                 new_expiry_time = (current_expiry + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
                 new_expiry_timestamp = int(datetime.strptime(new_expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
                 
-                client.expiry_time = new_expiry_timestamp
-                api.client.update(1, client)
+                extend_subscription(email, client.id, days, data.tg_id, client.sub_id, api)
                 
                 async with aiosqlite.connect(DB_PATH) as conn:
                     cursor = await conn.execute("""
