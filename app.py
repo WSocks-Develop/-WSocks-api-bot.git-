@@ -32,7 +32,7 @@ app.add_middleware(
 )
 
 # Путь к базе данных
-DB_PATH = "/app/db/subscriptions.db" if os.getenv("RENDER") else "subscriptions.db"
+DB_PATH = "subscriptions.db" if os.getenv("RENDER") else "subscriptions.db"
 
 # Корневой маршрут
 @app.get("/")
