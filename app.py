@@ -14,6 +14,7 @@ import hashlib
 import urllib.parse
 from fastapi.middleware.cors import CORSMiddleware
 from py3xui import Client
+import os
 
 app = FastAPI()
 
@@ -30,6 +31,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Путь к базе данных
+DB_PATH = "/app/db/subscriptions.db" if os.getenv("RENDER") else "subscriptions.db"
+
 # Корневой маршрут
 @app.get("/")
 async def root():
@@ -41,6 +45,11 @@ class AuthData(BaseModel):
 
 class BuySubscriptionData(BaseModel):
     tg_id: int
+    days: int
+
+class ExtendSubscriptionData(BaseModel):
+    tg_id: int
+    email: str
     days: int
 
 class ConfirmPaymentData(BaseModel):
@@ -157,13 +166,13 @@ async def buy_subscription(data: BuySubscriptionData):
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         
         # Сохраняем временные данные в pending_payments
-        async with aiosqlite.connect("subscriptions.db") as conn:
+        async with aiosqlite.connect(DB_PATH) as conn:
             await conn.execute("""
-                INSERT INTO pending_payments (tg_id, label, days, amount, email, panel_name, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO pending_payments (tg_id, label, days, amount, email, panel_name, created_at, is_extension)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data.tg_id, label, data.days, amount, email, current_panel['name'],
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), False
             ))
             await conn.commit()
         
@@ -181,6 +190,61 @@ async def buy_subscription(data: BuySubscriptionData):
         logger.error(f"Error initiating subscription purchase: {e}")
         raise HTTPException(status_code=500, detail=f"Error initiating subscription purchase: {str(e)}")
 
+@app.post("/api/extend-subscription")
+async def extend_subscription(data: ExtendSubscriptionData):
+    logger.info(f"Attempting to extend subscription for tg_id: {data.tg_id}, email: {data.email}, days: {data.days}")
+    try:
+        prices = {30: 89, 90: 249, 180: 449, 360: 849}
+        if data.days not in prices:
+            raise HTTPException(status_code=400, detail="Invalid subscription period")
+        amount = prices[data.days]
+        user = await get_user(data.tg_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Проверяем, существует ли подписка
+        async with aiosqlite.connect(DB_PATH) as conn:
+            cursor = await conn.execute("""
+                SELECT panel, expire FROM subscriptions
+                WHERE telegram_id = ? AND email = ?
+            """, (data.tg_id, data.email))
+            subscription = await cursor.fetchone()
+            if not subscription:
+                raise HTTPException(status_code=404, detail="Subscription not found")
+        
+        panel_name, current_expiry = subscription
+        api = get_api_by_name(panel_name)
+        if not api:
+            raise HTTPException(status_code=500, detail="Panel not available")
+        
+        label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}-extend"
+        payment_link = create_payment_link(amount, label)
+        
+        # Сохраняем временные данные в pending_payments
+        async with aiosqlite.connect(DB_PATH) as conn:
+            await conn.execute("""
+                INSERT INTO pending_payments (tg_id, label, days, amount, email, panel_name, created_at, is_extension)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data.tg_id, label, data.days, amount, data.email, panel_name,
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), True
+            ))
+            await conn.commit()
+        
+        logger.info(f"Extension payment link created for: {data.email}, label: {label}")
+        return {
+            "payment_link": payment_link,
+            "label": label,
+            "email": data.email,
+            "days": data.days,
+            "amount": amount
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error initiating subscription extension: {e}")
+        raise HTTPException(status_code=500, detail=f"Error initiating subscription extension: {str(e)}")
+
 @app.post("/api/confirm-payment")
 async def confirm_payment(data: ConfirmPaymentData):
     logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
@@ -190,9 +254,9 @@ async def confirm_payment(data: ConfirmPaymentData):
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         
         # Получаем данные из pending_payments
-        async with aiosqlite.connect("subscriptions.db") as conn:
+        async with aiosqlite.connect(DB_PATH) as conn:
             cursor = await conn.execute("""
-                SELECT days, amount, email, panel_name
+                SELECT days, amount, email, panel_name, is_extension
                 FROM pending_payments
                 WHERE tg_id = ? AND label = ?
             """, (data.tg_id, data.label))
@@ -200,50 +264,91 @@ async def confirm_payment(data: ConfirmPaymentData):
             if not payment_data:
                 raise HTTPException(status_code=404, detail="Pending payment not found")
             
-            days, amount, email, panel_name = payment_data
+            days, amount, email, panel_name, is_extension = payment_data
             
-            # Создаём подписку
             api = get_api_by_name(panel_name)
             if not api:
                 raise HTTPException(status_code=500, detail="Panel not available")
             
-            subscription_id = generate_sub(16)
-            expiry_time = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-            new_client = Client(
-                id=str(uuid.uuid4()),
-                enable=True,
-                tg_id=data.tg_id,
-                expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
-                flow="xtls-rprx-vision",
-                email=email,
-                sub_id=subscription_id,
-                limit_ip=5
-            )
+            if is_extension:
+                # Продление подписки
+                current_expiry = datetime.now(timezone.utc)
+                async with aiosqlite.connect(DB_PATH) as conn:
+                    cursor = await conn.execute("""
+                        SELECT expire FROM subscriptions
+                        WHERE telegram_id = ? AND email = ?
+                    """, (data.tg_id, email))
+                    sub_data = await cursor.fetchone()
+                    if sub_data:
+                        expiry_dt = datetime.strptime(sub_data[0], "%Y-%m-%d %H:%M:%S")
+                        if expiry_dt > current_expiry:
+                            current_expiry = expiry_dt
+                
+                new_expiry_time = (current_expiry + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                new_expiry_timestamp = int(datetime.strptime(new_expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
+                
+                # Обновляем клиента на панели
+                clients = api.client.list(1)
+                client = next((c for c in clients if c.email == email), None)
+                if not client:
+                    raise HTTPException(status_code=404, detail="Client not found on panel")
+                
+                client.expiry_time = new_expiry_timestamp
+                api.client.update(1, client)
+                
+                # Обновляем подписку в базе
+                async with aiosqlite.connect(DB_PATH) as conn:
+                    await conn.execute("""
+                        UPDATE subscriptions
+                        SET expire = ?
+                        WHERE telegram_id = ? AND email = ?
+                    """, (new_expiry_time, data.tg_id, email))
+                    await conn.commit()
+                
+                logger.info(f"Subscription extended: {email}, new expiry: {new_expiry_time}")
+            else:
+                # Новая подписка
+                subscription_id = generate_sub(16)
+                expiry_time = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                new_client = Client(
+                    id=str(uuid.uuid4()),
+                    enable=True,
+                    tg_id=data.tg_id,
+                    expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
+                    flow="xtls-rprx-vision",
+                    email=email,
+                    sub_id=subscription_id,
+                    limit_ip=5
+                )
+                
+                # Добавляем клиента на панель
+                api.client.add(1, [new_client])
+                
+                # Сохраняем подписку в базе
+                await add_subscription_to_db(data.tg_id, email, panel_name, expiry_time)
+                
+                logger.info(f"Subscription created: {email}")
             
-            # Добавляем клиента на панель
-            api.client.add(1, [new_client])
-            
-            # Сохраняем подписку и платёж в базе
-            await add_subscription_to_db(data.tg_id, email, panel_name, expiry_time)
+            # Сохраняем платёж в базе
             await add_payment_to_db(
-                data.tg_id, data.label, "покупка",
+                data.tg_id, data.label, "покупка" if not is_extension else "продление",
                 datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), amount, email
             )
             
             # Удаляем запись из pending_payments
-            await conn.execute("DELETE FROM pending_payments WHERE tg_id = ? AND label = ?", (data.tg_id, data.label))
-            await conn.commit()
+            async with aiosqlite.connect(DB_PATH) as conn:
+                await conn.execute("DELETE FROM pending_payments WHERE tg_id = ? AND label = ?", (data.tg_id, data.label))
+                await conn.commit()
             
             current_panel = get_best_panel()
             if not current_panel:
                 raise HTTPException(status_code=500, detail="No available panels")
-            subscription_key = current_panel["create_key"](new_client)
-            logger.info(f"Subscription created: {email}")
+            subscription_key = current_panel["create_key"](client if is_extension else new_client)
             return {
                 "success": True,
                 "email": email,
                 "subscription_key": subscription_key,
-                "expiry_date": expiry_time
+                "expiry_date": new_expiry_time if is_extension else expiry_time
             }
     except HTTPException as e:
         raise e
@@ -255,7 +360,7 @@ async def confirm_payment(data: ConfirmPaymentData):
 async def cancel_payment(data: ConfirmPaymentData):
     logger.info(f"Cancelling payment for tg_id: {data.tg_id}, label: {data.label}")
     try:
-        async with aiosqlite.connect("subscriptions.db") as conn:
+        async with aiosqlite.connect(DB_PATH) as conn:
             cursor = await conn.execute(
                 "DELETE FROM pending_payments WHERE tg_id = ? AND label = ?",
                 (data.tg_id, data.label)
@@ -277,7 +382,7 @@ async def startup_event():
         logger.error("API_TOKEN is not set in config.py")
         raise ValueError("API_TOKEN is not set")
     try:
-        async with aiosqlite.connect("subscriptions.db") as conn:
+        async with aiosqlite.connect(DB_PATH) as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users_terms (
                     telegram_id INTEGER PRIMARY KEY,
@@ -302,7 +407,8 @@ async def startup_event():
                     amount REAL NOT NULL,
                     email TEXT NOT NULL,
                     panel_name TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    is_extension BOOLEAN NOT NULL DEFAULT 0
                 )
             """)
             await conn.commit()
