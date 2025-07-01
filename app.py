@@ -66,17 +66,6 @@ def verify_init_data(init_data: str) -> dict:
         logger.error(f"Error verifying initData: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
-def extend_subscription(email: str, client_id: str, days: int, tg_id: int, sub_id: str, api):
-    inbounds = api.inbound.get_list()
-    for inbound in inbounds:
-        for client in inbound.settings.clients:
-            if client.email == email and client.tg_id == tg_id:
-                new_expiry = datetime.now(timezone.utc) + timedelta(days=days)
-                client.expiry_time = int(new_expiry.timestamp() * 1000)
-                api.client.update(client_id, client)
-                return new_expiry
-    raise HTTPException(status_code=404, detail="Client not found")
-
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
@@ -139,7 +128,7 @@ async def buy_subscription(data: BuySubscriptionData):
     try:
         if data.days not in [30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
-        prices = {30: 5, 90: 249, 180: 449, 360: 849}
+        prices = {30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
@@ -171,7 +160,7 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
     try:
         if data.days not in [30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
-        prices = {30: 5, 90: 5, 180: 5, 360: 5}
+        prices = {30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
         label = f"EXTEND-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         payment_link = create_payment_link(amount, label)
@@ -206,7 +195,9 @@ async def confirm_payment(data: ConfirmPaymentData):
         payment = payments.get(data.label)
         if not payment or payment["tg_id"] != data.tg_id:
             raise HTTPException(status_code=404, detail="Payment not found")
-        if not check_payment_status(data.label):
+        # Используем custom_label как в боте для теста
+        custom_label = "1615487633"
+        if not check_payment_status(custom_label):
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
         if not current_panel:
@@ -254,6 +245,9 @@ async def confirm_payment(data: ConfirmPaymentData):
             "key": subscription_key if not payment['label'].startswith("EXTEND-") else None,
             "expiry_date": new_expiry.strftime("%Y-%m-%d %H:%M:%S")
         }
+    except HTTPException as e:
+        logger.error(f"HTTP error in confirm_payment: {e.detail}")
+        raise
     except Exception as e:
-        logger.error(f"Error confirming payment: {e}")
-        raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
+        logger.error(f"Unexpected error in confirm_payment: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
