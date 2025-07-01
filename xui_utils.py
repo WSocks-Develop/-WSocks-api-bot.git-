@@ -1,127 +1,218 @@
-import logging
-from py3xui import Api, Client
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
+import json
+import uuid
+import logging
+import hmac
+import hashlib
+import urllib.parse
+from fastapi.middleware.cors import CORSMiddleware
+from py3xui import Client
+import random
+import string
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, PANELS
+from payments import create_payment_link, check_payment_status
 import config as cfg
 
-PANELS = [
+app = FastAPI()
 
-   {
-        "name": "Panel1",
-        "api": Api(host=cfg.PANEL1_HOST, username=cfg.PANEL1_USERNAME, password=cfg.PANEL1_PASSWORD, token=cfg.PANEL1_TOKEN),
-        "create_key": lambda client: (
-            f"vless://{client.id}@de-1.wsocks.ru:443?type=tcp&security=reality&pbk=c0DrIcQXeWqnmFysSVgfIVCcEr0LS_WJhlwxWsDnPWg&fp=chrome&sni=google.com&sid=bbdbd6f3&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
-         ),
-       "create_link": lambda client: (
-           f"https://de-1.wsocks.ru:2096/SubWSocks_VPN_DE_FRA-1/{client.sub_id}"
-       )
-     }
-    # {
-    #     "name": "Panel2",
-    #     "api": Api(host=cfg.PANEL2_HOST, username=cfg.PANEL2_USERNAME, password=cfg.PANEL2_PASSWORD, token=cfg.PANEL2_TOKEN),
-    #     "create_key": lambda client: (
-    #         f"vless://{client.id}@de-2.wsocks.ru:443?type=tcp&security=reality&pbk=s"
-    #         f"-R4V_XUgnbRlLLCtqri10dcdd1QLNEAU6B04LpRX3U&fp=chrome&sni=google.com&sid=5f&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
-    #     )
-    # },
-    # {
-    #     "name": "Panel3",
-    #     "api": Api(host=cfg.PANEL3_HOST, username=cfg.PANEL3_USERNAME, password=cfg.PANEL3_PASSWORD, token=cfg.PANEL3_TOKEN),
-    #     "create_key": lambda client: (
-    #         f"vless://{client.id}@de-3.wsocks.ru:443?type=tcp&security=reality&pbk"
-    #         f"=MCEDsjvqBrJGLXk-yJOsSu5-RK8fO7kkFT_RC_giNgM&fp=chrome&sni=google.com&sid=8e&spx=%2F&flow=xtls-rprx-vision#WSocks VPN Germany"
-    #     ),
-    #     "create_link": lambda client: (
-    #       f"https://de-3.wsocks.ru:2096/SubWSocks_VPN_DE_FRA-3/{client.sub_id}"
-    #   )
-    # }
-]
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-for panel in PANELS:
-    panel["api"].login()
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://wsocks-mini-app-zceh.onrender.com", "https://telegram.org"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def get_panel_load(api):
+# Временное хранилище в памяти для платежей
+payments = {}  # {label: {"tg_id": int, "days": int, "email": str, "amount": float}}
+
+
+def generate_sub(length=16):
+    chars = string.ascii_lowercase + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
+
+def verify_init_data(init_data: str) -> dict:
     try:
-        inbounds = api.inbound.get_list()
-        total_clients = sum(len(inbound.settings.clients) for inbound in inbounds)
-        return total_clients
-    except Exception as e:
-        logging.error(f"Ошибка при получении нагрузки панели: {e}")
-        return float("inf")
-
-def get_best_panel():
-    suitable_panel = None
-    min_load = float("inf")
-    for panel in PANELS:
-        load = get_panel_load(panel["api"])
-        if load < min_load:
-            min_load = load
-            suitable_panel = panel
-    return suitable_panel
-
-def get_api_by_name(name):
-    panel = next((panel for panel in PANELS if panel['name'] == name), None)
-    return panel['api'] if panel else None
-
-def get_active_subscriptions(tg_id):
-    subscriptions = []
-    for panel in PANELS:
+        if not init_data:
+            raise HTTPException(status_code=422, detail="init_data is empty")
+        parsed_data = dict(urllib.parse.parse_qsl(init_data))
+        logger.info(f"Parsed init_data: {parsed_data}")
+        received_hash = parsed_data.pop('hash', None)
+        if not received_hash:
+            raise HTTPException(status_code=422, detail="Hash not found")
+        data_check_string = '\n'.join(f'{k}={v}' for k, v in sorted(parsed_data.items()))
+        secret_key = hmac.new("WebAppData".encode(), cfg.API_TOKEN.encode(), hashlib.sha256).digest()
+        computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        logger.info(f"Computed hash: {computed_hash}, Received hash: {received_hash}")
+        if computed_hash != received_hash:
+            raise HTTPException(status_code=401, detail="Invalid auth data")
+        user_data = urllib.parse.parse_qs(init_data).get('user', [''])[0]
+        if not user_data:
+            raise HTTPException(status_code=422, detail="User data not found")
         try:
-            inbounds = panel["api"].inbound.get_list()
-            for inbound in inbounds:
-                for client in inbound.settings.clients:
-                    if client.tg_id == tg_id:
-                        expiry_date = datetime.fromtimestamp(client.expiry_time / 1000.0, tz=timezone.utc)
-                        subscriptions.append({
-                            "email": client.email,
-                            "id": client.id,
-                            "key": panel["create_key"](client),
-                            "sub_link": panel["create_link"](client),
-                            "expiry_date": expiry_date,
-                            "sub_id": client.sub_id,
-                            "is_expired": expiry_date <= datetime.now(timezone.utc),
-                            "panel": panel["name"]
-                        })
-        except Exception as e:
-            logging.error(f"Ошибка при проверке подписок на {panel['name']}: {e}")
-    return subscriptions
-
-def extend_subscription(user_email: str, user_uuid: str, days_extension: int, tg_id, subscription_id, api):
-    try:
-        client = api.client.get_by_email(user_email)
-        if not client:
-            print(f"Ошибка: клиент с Email {user_email} не найден.")
-            return
-        current_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-        if client.expiry_time < current_time:
-            new_expiry_time = current_time + int(timedelta(days=days_extension).total_seconds() * 1000)
-        else:
-            new_expiry_time = client.expiry_time + int(timedelta(days=days_extension).total_seconds() * 1000)
-        client.expiry_time = new_expiry_time
-        client.id = user_uuid
-        client.tg_id = tg_id
-        client.flow = "xtls-rprx-vision"
-        client.enable = True
-        client.limit_ip = 5
-        client.sub_id = subscription_id
-        api.client.update(user_uuid, client)
-        print(f"Подписка {client.email} успешно продлена.")
+            return {'user': json.loads(user_data)}
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            raise HTTPException(status_code=422, detail=f"Invalid user data format: {str(e)}")
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        print(f"Ошибка при продлении подписки: {e}")
+        logger.error(f"Error verifying initData: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
-def delete_trial_subscription(panel, email):
-    api = get_api_by_name(panel)
-    inbounds = api.inbound.get_list()
-    for inbound in inbounds:
-        for client in inbound.settings.clients:
-            if client.email == email:
-                api.client.delete(1, client.id)
-    logging.info(f"Удалена пробная подписка {email} с панели {panel}.")
 
-def delete_subscriptions(panel, email):
-    api = get_api_by_name(panel)
-    inbounds = api.inbound.get_list()
-    for inbound in inbounds:
-        for client in inbound.settings.clients:
-            if client.email == email and ("DE-FRA-USER" in email or "DE-FRA-TRIAL" in email):
-                api.client.delete(1, client.id)
-    logging.info(f"Удалена подписка {email} с панели {panel}.")
+@app.get("/")
+async def root():
+    logger.info("Root endpoint accessed")
+    return {"status": "OK"}
+
+
+class AuthData(BaseModel):
+    init_data: str
+
+
+class BuySubscriptionData(BaseModel):
+    tg_id: int
+    days: int
+
+
+class ConfirmPaymentData(BaseModel):
+    tg_id: int
+    label: str
+
+
+@app.post("/api/auth")
+async def auth(data: AuthData):
+    logger.info(f"Received init_data: {data.init_data}")
+    try:
+        user_data = verify_init_data(data.init_data)
+        tg_id = user_data['user']['id']
+        first_name = user_data['user'].get('first_name', '')
+        logger.info(f"Authenticated user: {tg_id}")
+        return {"user": {"telegram_id": tg_id, "first_name": first_name}}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Auth error: {e}")
+        raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
+
+@app.get("/api/subscriptions")
+async def get_subscriptions(tg_id: int):
+    logger.info(f"Fetching subscriptions for tg_id: {tg_id}")
+    try:
+        subscriptions = get_active_subscriptions(tg_id)
+        formatted_subscriptions = [
+            {
+                "email": sub['email'],
+                "panel": sub['panel'],
+                "expiry_date": sub['expiry_date'].strftime("%Y-%m-%d %H:%M:%S"),
+                "is_expired": sub['is_expired']
+            }
+            for sub in subscriptions
+        ]
+        logger.info(f"Subscriptions fetched: {formatted_subscriptions}")
+        return {"subscriptions": formatted_subscriptions}
+    except Exception as e:
+        logger.error(f"Error fetching subscriptions: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
+
+@app.post("/api/buy-subscription")
+async def buy_subscription(data: BuySubscriptionData):
+    logger.info(f"Creating subscription for tg_id: {data.tg_id}, days: {data.days}")
+    try:
+        # Проверка допустимых сроков подписки
+        if data.days not in [30, 90, 180, 360]:
+            raise HTTPException(status_code=400, detail="Invalid subscription period")
+
+        # Цены из бота
+        prices = {30: 5, 90: 5, 180: 5, 360: 5}
+        amount = prices[data.days]
+
+        # Генерация уникального email и label
+        email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
+
+        # Создание платёжной ссылки через YooMoney
+        payment_link = create_payment_link(amount, label)
+
+        # Выбор лучшей панели
+        current_panel = get_best_panel()
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="No available panels")
+
+        # Сохранение данных платежа в памяти
+        payments[label] = {
+            "tg_id": data.tg_id,
+            "days": data.days,
+            "email": email,
+            "amount": amount,
+            "panel_name": current_panel['name']
+        }
+
+        return {
+            "payment_link": payment_link,
+            "email": email,
+            "panel": current_panel['name'],
+            "label": label,
+            "amount": amount
+        }
+    except Exception as e:
+        logger.error(f"Error creating subscription: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
+
+
+@app.post("/api/confirm-payment")
+async def confirm_payment(data: ConfirmPaymentData):
+    logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
+    try:
+        # Проверка существования платежа
+        payment = payments.get(data.label)
+        if not payment or payment["tg_id"] != data.tg_id:
+            raise HTTPException(status_code=404, detail="Payment not found")
+
+        # Проверка статуса платежа через YooMoney
+        if not check_payment_status(data.label):
+            raise HTTPException(status_code=400, detail="Payment not confirmed")
+
+        # Создание подписки на панели 3XUI
+        current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="Panel not found")
+
+        api = get_api_by_name(payment['panel_name'])
+        subscription_id = generate_sub(16)
+        expiry_time = datetime.now(timezone.utc) + timedelta(days=payment['days'])
+
+        new_client = Client(
+            id=str(uuid.uuid4()),
+            enable=True,
+            tg_id=data.tg_id,
+            expiry_time=int(expiry_time.timestamp() * 1000),
+            flow="xtls-rprx-vision",
+            email=payment['email'],
+            sub_id=subscription_id,
+            limit_ip=5
+        )
+        api.client.add(1, [new_client])
+        subscription_key = current_panel["create_key"](new_client)
+
+        # Удаление платежа после подтверждения
+        del payments[data.label]
+
+        return {
+            "success": True,
+            "email": payment['email'],
+            "key": subscription_key,
+            "expiry_date": expiry_time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Error confirming payment: {e}")
+        raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
