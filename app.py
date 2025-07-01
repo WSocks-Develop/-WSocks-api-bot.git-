@@ -182,7 +182,8 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             "email": data.email,
             "panel": selected_sub['panel'],
             "label": label,
-            "amount": amount
+            "amount": amount,
+            "days": data.days
         }
     except Exception as e:
         logger.error(f"Error extending subscription: {e}")
@@ -194,18 +195,22 @@ async def confirm_payment(data: ConfirmPaymentData):
     try:
         payment = payments.get(data.label)
         if not payment or payment["tg_id"] != data.tg_id:
+            logger.error(f"Payment not found for label: {data.label}")
             raise HTTPException(status_code=404, detail="Payment not found")
         # Используем custom_label как в боте для теста
         custom_label = "1615487633"
         if not check_payment_status(custom_label):
+            logger.error(f"Payment not confirmed for custom_label: {custom_label}")
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
         if not current_panel:
+            logger.error(f"Panel not found: {payment['panel_name']}")
             raise HTTPException(status_code=500, detail="Panel not found")
         api = get_api_by_name(payment['panel_name'])
         subscriptions = get_active_subscriptions(data.tg_id)
         selected_sub = next((sub for sub in subscriptions if sub['email'] == payment['email']), None)
         if not selected_sub:
+            logger.error(f"Subscription not found for email: {payment['email']}")
             raise HTTPException(status_code=404, detail="Subscription not found")
         if payment['label'].startswith("EXTEND-"):
             client_found = False
@@ -221,6 +226,7 @@ async def confirm_payment(data: ConfirmPaymentData):
                 if client_found:
                     break
             if not client_found:
+                logger.error(f"Client not found for email: {payment['email']}, tg_id: {data.tg_id}")
                 raise HTTPException(status_code=404, detail="Client not found")
         else:
             subscription_id = generate_sub(16)
@@ -239,9 +245,13 @@ async def confirm_payment(data: ConfirmPaymentData):
             subscription_key = current_panel["create_key"](new_client)
             new_expiry = expiry_time
         del payments[data.label]
+        logger.info(f"Payment confirmed for tg_id: {data.tg_id}, email: {payment['email']}, new_expiry: {new_expiry}")
         return {
             "success": True,
-            "email": payment['email']
+            "email": payment['email'],
+            "key": subscription_key if not payment['label'].startswith("EXTEND-") else None,
+            "expiry_date": new_expiry.strftime("%Y-%m-%d %H:%M:%S"),
+            "days": payment['days']
         }
     except HTTPException as e:
         logger.error(f"HTTP error in confirm_payment: {e.detail}")
