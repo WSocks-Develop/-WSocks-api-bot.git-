@@ -223,7 +223,7 @@ async def buy_subscription(data: BuySubscriptionData):
         if data.days not in [30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
 
-        prices = {30: 89, 90: 249, 180: 449, 360: 849}
+        prices = {30: 5, 90: 5, 180: 5, 360: 5}
         amount = prices[data.days]
 
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
