@@ -4,6 +4,13 @@ from datetime import datetime, timezone, timedelta
 import json
 import uuid
 import logging
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, PANELS
+from payments import create_payment_link, check_payment_status
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+import config as cfg
 import hmac
 import hashlib
 import urllib.parse
@@ -11,12 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from py3xui import Client
 import random
 import string
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
-from xui_utils import get_best_panel, get_api_by_name, PANELS
-from payments import create_payment_link, check_payment_status
-import config as cfg
 
 app = FastAPI()
 
@@ -195,6 +196,25 @@ async def auth(data: AuthData):
         logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
 
+@app.get("/api/subscriptions")
+async def get_subscriptions(tg_id: int):
+    logger.info(f"Fetching subscriptions for tg_id: {tg_id}")
+    try:
+        subscriptions = get_active_subscriptions(tg_id)
+        formatted_subscriptions = [
+            {
+                "email": sub['email'],
+                "panel": sub['panel'],
+                "expiry_date": sub['expiry_date'].strftime("%Y-%m-%d %H:%M:%S"),
+                "is_expired": sub['is_expired']
+            }
+            for sub in subscriptions
+        ]
+        logger.info(f"Subscriptions fetched: {formatted_subscriptions}")
+        return {"subscriptions": formatted_subscriptions}
+    except Exception as e:
+        logger.error(f"Error fetching subscriptions: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
 
 @app.post("/api/buy-subscription")
 async def buy_subscription(data: BuySubscriptionData):
