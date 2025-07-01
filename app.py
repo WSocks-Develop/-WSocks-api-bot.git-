@@ -241,9 +241,7 @@ async def confirm_payment(data: ConfirmPaymentData):
         del payments[data.label]
         return {
             "success": True,
-            "email": payment['email'],
-            "key": subscription_key if not payment['label'].startswith("EXTEND-") else None,
-            "expiry_date": new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+            "email": payment['email']
         }
     except HTTPException as e:
         logger.error(f"HTTP error in confirm_payment: {e.detail}")
