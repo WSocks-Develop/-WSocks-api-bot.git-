@@ -32,10 +32,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Временное хранилище в памяти для платежей
 payments = {}  # {label: {"tg_id": int, "days": int, "email": str, "amount": float, "panel_name": str}}
 
-# Настройка APScheduler
+# Настройка APScheduler (без старта на уровне модуля)
 scheduler = BackgroundScheduler(
     job_defaults={
         'coalesce': True,
@@ -43,6 +44,7 @@ scheduler = BackgroundScheduler(
         'misfire_grace_time': 30
     }
 )
+
 
 # Логирование событий планировщика
 def scheduler_listener(event):
@@ -53,9 +55,6 @@ def scheduler_listener(event):
 
 
 scheduler.add_listener(scheduler_listener, EVENT_JOB_ERROR | EVENT_JOB_EXECUTED)
-
-# Запуск планировщика
-scheduler.start()
 
 
 def generate_sub(length=16):
@@ -145,13 +144,20 @@ def check_payment_and_create_subscription(label: str):
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting scheduler")
-    scheduler.start()
+    try:
+        scheduler.start()
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        raise HTTPException(status_code=500, detail="Failed to start scheduler")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down scheduler")
-    scheduler.shutdown()
+    try:
+        scheduler.shutdown()
+    except Exception as e:
+        logger.warning(f"Failed to shutdown scheduler: {e}")
 
 
 @app.get("/")
@@ -220,7 +226,10 @@ async def buy_subscription(data: BuySubscriptionData):
         # Проверка, нет ли уже задачи для этого label
         if scheduler.get_job(f"check_payment_{label}"):
             logger.warning(f"Job for {label} already exists, removing old job")
-            scheduler.remove_job(f"check_payment_{label}")
+            try:
+                scheduler.remove_job(f"check_payment_{label}")
+            except Exception as e:
+                logger.warning(f"Failed to remove existing job {label}: {e}")
 
         # Запускаем задачу для проверки статуса платежа
         scheduler.add_job(
