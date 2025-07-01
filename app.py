@@ -1,12 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
-import aiosqlite
 import json
 import uuid
 import logging
-from database import get_user, create_user, update_user_terms, add_subscription_to_db, add_payment_to_db
-from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, PANELS
 from payments import create_payment_link, check_payment_status
 import config as cfg
 import hmac
@@ -32,35 +30,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Путь к базе данных
-DB_PATH = "subscriptions.db"
-
-
-# Корневой маршрут
-@app.get("/")
-async def root():
-    logger.info("Root endpoint accessed")
-    return {"status": "OK"}
-
-
-class AuthData(BaseModel):
-    init_data: str
-
-
-class BuySubscriptionData(BaseModel):
-    tg_id: int
-    days: int
-
-
-class ExtendSubscriptionData(BaseModel):
-    tg_id: int
-    email: str
-    days: int
-
-
-class ConfirmPaymentData(BaseModel):
-    tg_id: int
-    label: str
+# Временное хранилище в памяти для платежей
+payments = {}  # {label: {"tg_id": int, "days": int, "email": str, "amount": float}}
 
 
 def generate_sub(length=16):
@@ -98,30 +69,40 @@ def verify_init_data(init_data: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
 
+@app.get("/")
+async def root():
+    logger.info("Root endpoint accessed")
+    return {"status": "OK"}
+
+
+class AuthData(BaseModel):
+    init_data: str
+
+
+class BuySubscriptionData(BaseModel):
+    tg_id: int
+    days: int
+
+
+class ConfirmPaymentData(BaseModel):
+    tg_id: int
+    label: str
+
+
 @app.post("/api/auth")
 async def auth(data: AuthData):
     logger.info(f"Received init_data: {data.init_data}")
     try:
         user_data = verify_init_data(data.init_data)
         tg_id = user_data['user']['id']
-        logger.info(f"Attempting to get user: {tg_id}")
-        user = await get_user(tg_id)
-        if not user:
-            logger.info(f"Creating new user: {tg_id}")
-            await create_user(tg_id)
-            user = await get_user(tg_id)
-        if not user['accepted_terms']:
-            logger.info(f"Updating terms for user: {tg_id}")
-            await update_user_terms(tg_id, True)
-            user['accepted_terms'] = True
+        first_name = user_data['user'].get('first_name', '')
         logger.info(f"Authenticated user: {tg_id}")
-        return {"user": {"telegram_id": tg_id, "first_name": user_data['user'].get('first_name', '')}}
+        return {"user": {"telegram_id": tg_id, "first_name": first_name}}
     except HTTPException as e:
         raise e
     except Exception as e:
         logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
-
 
 @app.get("/api/subscriptions")
 async def get_subscriptions(tg_id: int):
@@ -142,3 +123,96 @@ async def get_subscriptions(tg_id: int):
     except Exception as e:
         logger.error(f"Error fetching subscriptions: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
+
+@app.post("/api/buy-subscription")
+async def buy_subscription(data: BuySubscriptionData):
+    logger.info(f"Creating subscription for tg_id: {data.tg_id}, days: {data.days}")
+    try:
+        # Проверка допустимых сроков подписки
+        if data.days not in [30, 90, 180, 360]:
+            raise HTTPException(status_code=400, detail="Invalid subscription period")
+
+        # Цены из бота
+        prices = {30: 5, 90: 5, 180: 5, 360: 5}
+        amount = prices[data.days]
+
+        # Генерация уникального email и label
+        email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
+
+        # Создание платёжной ссылки через YooMoney
+        payment_link = create_payment_link(amount, label)
+
+        # Выбор лучшей панели
+        current_panel = get_best_panel()
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="No available panels")
+
+        # Сохранение данных платежа в памяти
+        payments[label] = {
+            "tg_id": data.tg_id,
+            "days": data.days,
+            "email": email,
+            "amount": amount,
+            "panel_name": current_panel['name']
+        }
+
+        return {
+            "payment_link": payment_link,
+            "email": email,
+            "panel": current_panel['name'],
+            "label": label,
+            "amount": amount
+        }
+    except Exception as e:
+        logger.error(f"Error creating subscription: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
+
+
+@app.post("/api/confirm-payment")
+async def confirm_payment(data: ConfirmPaymentData):
+    logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
+    try:
+        # Проверка существования платежа
+        payment = payments.get(data.label)
+        if not payment or payment["tg_id"] != data.tg_id:
+            raise HTTPException(status_code=404, detail="Payment not found")
+
+        # Проверка статуса платежа через YooMoney
+        if not check_payment_status(data.label):
+            raise HTTPException(status_code=400, detail="Payment not confirmed")
+
+        # Создание подписки на панели 3XUI
+        current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="Panel not found")
+
+        api = get_api_by_name(payment['panel_name'])
+        subscription_id = generate_sub(16)
+        expiry_time = datetime.now(timezone.utc) + timedelta(days=payment['days'])
+
+        new_client = Client(
+            id=str(uuid.uuid4()),
+            enable=True,
+            tg_id=data.tg_id,
+            expiry_time=int(expiry_time.timestamp() * 1000),
+            flow="xtls-rprx-vision",
+            email=payment['email'],
+            sub_id=subscription_id,
+            limit_ip=5
+        )
+        api.client.add(1, [new_client])
+        subscription_key = current_panel["create_key"](new_client)
+
+        # Удаление платежа после подтверждения
+        del payments[data.label]
+
+        return {
+            "success": True,
+            "email": payment['email'],
+            "key": subscription_key,
+            "expiry_date": expiry_time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Error confirming payment: {e}")
+        raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
