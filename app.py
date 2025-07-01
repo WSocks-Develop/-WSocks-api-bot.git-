@@ -4,13 +4,6 @@ from datetime import datetime, timezone, timedelta
 import json
 import uuid
 import logging
-from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, PANELS
-from payments import create_payment_link, check_payment_status
-
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
-import config as cfg
 import hmac
 import hashlib
 import urllib.parse
@@ -18,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from py3xui import Client
 import random
 import string
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, PANELS
+from payments import create_payment_link, check_payment_status
+import config as cfg
 
 app = FastAPI()
 
@@ -28,34 +24,14 @@ logger = logging.getLogger(__name__)
 # Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://wsocks-mini-app-fkbm.onrender.com", "https://telegram.org"],
+    allow_origins=["https://wsocks-mini-app-zceh.onrender.com", "https://telegram.org"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Временное хранилище в памяти для платежей
-payments = {}  # {label: {"tg_id": int, "days": int, "email": str, "amount": float, "panel_name": str}}
-
-# Настройка APScheduler (без старта на уровне модуля)
-scheduler = BackgroundScheduler(
-    job_defaults={
-        'coalesce': True,
-        'max_instances': 1,
-        'misfire_grace_time': 30
-    }
-)
-
-
-# Логирование событий планировщика
-def scheduler_listener(event):
-    if event.exception:
-        logger.error(f"Scheduler job {event.job_id} failed: {event.exception}")
-    else:
-        logger.info(f"Scheduler job {event.job_id} executed successfully")
-
-
-scheduler.add_listener(scheduler_listener, EVENT_JOB_ERROR | EVENT_JOB_EXECUTED)
+payments = {}  # {label: {"tg_id": int, "days": int, "email": str, "amount": float}}
 
 
 def generate_sub(length=16):
@@ -93,74 +69,6 @@ def verify_init_data(init_data: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
 
-def check_payment_and_create_subscription(label: str):
-    try:
-        payment = payments.get(label)
-        if not payment:
-            logger.info(f"Payment {label} not found, stopping scheduler job")
-            scheduler.remove_job(f"check_payment_{label}")
-            return
-
-        logger.info(f"Checking payment status for label: {label}")
-        if check_payment_status(label):
-            logger.info(f"Payment {label} confirmed, creating subscription")
-            current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
-            if not current_panel:
-                logger.error(f"Panel {payment['panel_name']} not found")
-                scheduler.remove_job(f"check_payment_{label}")
-                return
-
-            api = get_api_by_name(payment['panel_name'])
-            subscription_id = generate_sub(16)
-            expiry_time = datetime.now(timezone.utc) + timedelta(days=payment['days'])
-
-            new_client = Client(
-                id=str(uuid.uuid4()),
-                enable=True,
-                tg_id=payment['tg_id'],
-                expiry_time=int(expiry_time.timestamp() * 1000),
-                flow="xtls-rprx-vision",
-                email=payment['email'],
-                sub_id=subscription_id,
-                limit_ip=5
-            )
-            api.client.add(1, [new_client])
-            subscription_key = current_panel["create_key"](new_client)
-
-            # Удаляем задачу и платёж
-            del payments[label]
-            scheduler.remove_job(f"check_payment_{label}")
-
-            logger.info(f"Subscription created for {payment['email']}, key: {subscription_key}")
-        else:
-            logger.info(f"Payment {label} not yet confirmed")
-    except Exception as e:
-        logger.error(f"Error in check_payment_and_create_subscription for {label}: {e}")
-        try:
-            scheduler.remove_job(f"check_payment_{label}")
-        except Exception as remove_error:
-            logger.warning(f"Failed to remove job {label}: {remove_error}")
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting scheduler")
-    try:
-        scheduler.start()
-    except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
-        raise HTTPException(status_code=500, detail="Failed to start scheduler")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down scheduler")
-    try:
-        scheduler.shutdown()
-    except Exception as e:
-        logger.warning(f"Failed to shutdown scheduler: {e}")
-
-
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
@@ -176,7 +84,7 @@ class BuySubscriptionData(BaseModel):
     days: int
 
 
-class CancelPaymentData(BaseModel):
+class ConfirmPaymentData(BaseModel):
     tg_id: int
     label: str
 
@@ -220,21 +128,27 @@ async def get_subscriptions(tg_id: int):
 async def buy_subscription(data: BuySubscriptionData):
     logger.info(f"Creating subscription for tg_id: {data.tg_id}, days: {data.days}")
     try:
+        # Проверка допустимых сроков подписки
         if data.days not in [30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
 
+        # Цены из бота
         prices = {30: 5, 90: 5, 180: 5, 360: 5}
         amount = prices[data.days]
 
+        # Генерация уникального email и label
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
 
+        # Создание платёжной ссылки через YooMoney
         payment_link = create_payment_link(amount, label)
 
+        # Выбор лучшей панели
         current_panel = get_best_panel()
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
 
+        # Сохранение данных платежа в памяти
         payments[label] = {
             "tg_id": data.tg_id,
             "days": data.days,
@@ -242,26 +156,6 @@ async def buy_subscription(data: BuySubscriptionData):
             "amount": amount,
             "panel_name": current_panel['name']
         }
-
-        # Проверка, нет ли уже задачи для этого label
-        if scheduler.get_job(f"check_payment_{label}"):
-            logger.warning(f"Job for {label} already exists, removing old job")
-            try:
-                scheduler.remove_job(f"check_payment_{label}")
-            except Exception as e:
-                logger.warning(f"Failed to remove existing job {label}: {e}")
-
-        # Запускаем задачу для проверки статуса платежа
-        scheduler.add_job(
-            check_payment_and_create_subscription,
-            trigger=IntervalTrigger(seconds=10),
-            id=f"check_payment_{label}",
-            max_instances=1,
-            replace_existing=True,
-            args=[label],
-            end_date=datetime.now(timezone.utc) + timedelta(minutes=5)
-        )
-        logger.info(f"Scheduler job added for payment {label}")
 
         return {
             "payment_link": payment_link,
@@ -275,23 +169,50 @@ async def buy_subscription(data: BuySubscriptionData):
         raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
 
 
-@app.delete("/api/cancel-payment")
-async def cancel_payment(data: CancelPaymentData):
-    logger.info(f"Canceling payment for tg_id: {data.tg_id}, label: {data.label}")
+@app.post("/api/confirm-payment")
+async def confirm_payment(data: ConfirmPaymentData):
+    logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
     try:
-        if data.label not in payments or payments[data.label]["tg_id"] != data.tg_id:
+        # Проверка существования платежа
+        payment = payments.get(data.label)
+        if not payment or payment["tg_id"] != data.tg_id:
             raise HTTPException(status_code=404, detail="Payment not found")
 
-        # Удаляем задачу проверки платежа
-        try:
-            scheduler.remove_job(f"check_payment_{data.label}")
-            logger.info(f"Scheduler job removed for payment {data.label}")
-        except Exception as e:
-            logger.warning(f"No scheduler job found for {data.label}: {e}")
+        # Проверка статуса платежа через YooMoney
+        if not check_payment_status(data.label):
+            raise HTTPException(status_code=400, detail="Payment not confirmed")
 
-        # Удаляем платёж
+        # Создание подписки на панели 3XUI
+        current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="Panel not found")
+
+        api = get_api_by_name(payment['panel_name'])
+        subscription_id = generate_sub(16)
+        expiry_time = datetime.now(timezone.utc) + timedelta(days=payment['days'])
+
+        new_client = Client(
+            id=str(uuid.uuid4()),
+            enable=True,
+            tg_id=data.tg_id,
+            expiry_time=int(expiry_time.timestamp() * 1000),
+            flow="xtls-rprx-vision",
+            email=payment['email'],
+            sub_id=subscription_id,
+            limit_ip=5
+        )
+        api.client.add(1, [new_client])
+        subscription_key = current_panel["create_key"](new_client)
+
+        # Удаление платежа после подтверждения
         del payments[data.label]
-        return {"success": True}
+
+        return {
+            "success": True,
+            "email": payment['email'],
+            "key": subscription_key,
+            "expiry_date": expiry_time.strftime("%Y-%m-%d %H:%M:%S")
+        }
     except Exception as e:
-        logger.error(f"Error canceling payment: {e}")
-        raise HTTPException(status_code=500, detail=f"Error canceling payment: {str(e)}")
+        logger.error(f"Error confirming payment: {e}")
+        raise HTTPException(status_code=500, detail=f"Error confirming payment: {str(e)}")
