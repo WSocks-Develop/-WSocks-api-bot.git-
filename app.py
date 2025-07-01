@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://wsocks-mini-app.onrender.com", "https://telegram.org"],
+    allow_origins=["https://wsocks-api-bot-kype.onrender.com", "https://telegram.org"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
