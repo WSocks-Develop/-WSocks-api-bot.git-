@@ -130,7 +130,7 @@ async def buy_subscription(data: BuySubscriptionData):
             raise HTTPException(status_code=400, detail="Invalid subscription period")
         prices = {30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
-        email = f"1615487633"
+        email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         label = f"{data.tg_id}-{uuid.uuid4().hex[:6]}"
         payment_link = create_payment_link(amount, label)
         current_panel = get_best_panel()
@@ -163,7 +163,7 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             raise HTTPException(status_code=400, detail="Invalid subscription period")
         prices = {30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
-        label = f"1615487633"
+        label = f"EXTEND-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         payment_link = create_payment_link(amount, label)
         subscriptions = get_active_subscriptions(data.tg_id)
         selected_sub = next((sub for sub in subscriptions if sub['email'] == data.email), None)
@@ -195,10 +195,11 @@ async def confirm_payment(data: ConfirmPaymentData):
     logger.info(f"Confirming payment for tg_id: {data.tg_id}, label: {data.label}")
     try:
         payment = payments.get(data.label)
+        current_label = data.label
         if not payment or payment["tg_id"] != data.tg_id:
             logger.error(f"Payment not found for label: {data.label}, tg_id: {data.tg_id}")
             raise HTTPException(status_code=404, detail="Payment not found")
-        if not check_payment_status(data.label):
+        if not check_payment_status(current_label):
             logger.error(f"Payment not confirmed for label: {data.label}")
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
@@ -212,7 +213,7 @@ async def confirm_payment(data: ConfirmPaymentData):
             logger.error(f"Subscription not found for email: {payment['email']}")
             raise HTTPException(status_code=404, detail="Subscription not found")
         new_expiry = None
-        if payment['label'].startswith("EXTEND-"):
+        if not current_label.startswith("EXTEND-"):
             client_found = False
             inbounds = api.inbound.get_list()
             for inbound in inbounds:
