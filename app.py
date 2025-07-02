@@ -147,7 +147,7 @@ async def buy_subscription(data: BuySubscriptionData):
             "payment_link": payment_link,
             "email": email,
             "panel": current_panel['name'],
-            "label": label,
+            "label": "1615487633",
             "amount": amount,
             "days": data.days
         }
