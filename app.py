@@ -148,7 +148,8 @@ async def buy_subscription(data: BuySubscriptionData):
             "email": email,
             "panel": current_panel['name'],
             "label": label,
-            "amount": amount
+            "amount": amount,
+            "days": data.days
         }
     except Exception as e:
         logger.error(f"Error creating subscription: {e}")
@@ -195,12 +196,10 @@ async def confirm_payment(data: ConfirmPaymentData):
     try:
         payment = payments.get(data.label)
         if not payment or payment["tg_id"] != data.tg_id:
-            logger.error(f"Payment not found for label: {data.label}")
+            logger.error(f"Payment not found for label: {data.label}, tg_id: {data.tg_id}")
             raise HTTPException(status_code=404, detail="Payment not found")
-        # Используем custom_label как в боте для теста
-        custom_label = "1615487633"
-        if not check_payment_status(custom_label):
-            logger.error(f"Payment not confirmed for custom_label: {custom_label}")
+        if not check_payment_status("1615487633"):
+            logger.error(f"Payment not confirmed for label: {data.label}")
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
         if not current_panel:
@@ -212,6 +211,7 @@ async def confirm_payment(data: ConfirmPaymentData):
         if not selected_sub:
             logger.error(f"Subscription not found for email: {payment['email']}")
             raise HTTPException(status_code=404, detail="Subscription not found")
+        new_expiry = None
         if payment['label'].startswith("EXTEND-"):
             client_found = False
             inbounds = api.inbound.get_list()
@@ -258,4 +258,4 @@ async def confirm_payment(data: ConfirmPaymentData):
         raise
     except Exception as e:
         logger.error(f"Unexpected error in confirm_payment: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error in confirm_payment: {str(e)}")
