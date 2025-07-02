@@ -196,7 +196,7 @@ async def confirm_payment(data: ConfirmPaymentData):
     try:
         payment = payments.get(data.label)
         current_label = data.label
-        if not payment or payment["tg_id"] != data.tg_id:
+        if  payment["tg_id"] != data.tg_id: #or not payment
             logger.error(f"Payment not found for label: {data.label}, tg_id: {data.tg_id}")
             raise HTTPException(status_code=404, detail="Payment not found")
         if not check_payment_status(current_label):
