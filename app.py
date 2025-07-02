@@ -198,7 +198,7 @@ async def confirm_payment(data: ConfirmPaymentData):
         if not payment or payment["tg_id"] != data.tg_id:
             logger.error(f"Payment not found for label: {data.label}, tg_id: {data.tg_id}")
             raise HTTPException(status_code=404, detail="Payment not found")
-        if not check_payment_status("1615487633"):
+        if not check_payment_status(data.label):
             logger.error(f"Payment not confirmed for label: {data.label}")
             raise HTTPException(status_code=400, detail="Payment not confirmed")
         current_panel = next((p for p in PANELS if p['name'] == payment['panel_name']), None)
