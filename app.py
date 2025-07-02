@@ -182,7 +182,7 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             "payment_link": payment_link,
             "email": data.email,
             "panel": selected_sub['panel'],
-            "label": label,
+            "label": "1615487633",
             "amount": amount,
             "days": data.days
         }
