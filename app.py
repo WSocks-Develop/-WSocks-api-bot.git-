@@ -163,7 +163,7 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             raise HTTPException(status_code=400, detail="Invalid subscription period")
         prices = {30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
-        label = f"EXTEND-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        label = f"1615487633"
         payment_link = create_payment_link(amount, label)
         subscriptions = get_active_subscriptions(data.tg_id)
         selected_sub = next((sub for sub in subscriptions if sub['email'] == data.email), None)
