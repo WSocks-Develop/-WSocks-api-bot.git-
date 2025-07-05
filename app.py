@@ -224,7 +224,7 @@ async def activate_trial(data: TrialSubscriptionData):
     logger.info(f"Activating trial subscription for tg_id: {data.tg_id}")
     try:
         trial_status = await get_trial_status(str(data.tg_id), pool)
-        if trial_status is not None:
+        if trial_status == 1:
             raise HTTPException(status_code=400, detail="Вы уже активировали пробную подписку")
         email = f"DE-FRA-TRIAL-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         current_panel = get_best_panel()
