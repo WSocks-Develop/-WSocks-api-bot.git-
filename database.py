@@ -18,7 +18,7 @@ async def add_subscription_to_db(tg_id, email, panel, expiry_date, pool):
 async def update_subscriptions_on_db(email, expiry_date, pool):
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE users SET expiry_date = $1, warn = FALSE, end = FALSE WHERE email = $2",
+            "UPDATE users SET expiry_date = $1, warn = 0, ends = 0 WHERE email = $2",
             expiry_date, email
         )
         logging.info(f"Подписка обновлена: {email}")
