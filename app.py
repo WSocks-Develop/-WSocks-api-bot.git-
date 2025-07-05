@@ -30,9 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def generate_sub(length=16):
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
+
 
 def verify_init_data(init_data: str) -> dict:
     try:
@@ -62,22 +64,27 @@ def verify_init_data(init_data: str) -> dict:
         logger.error(f"Error verifying initData: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
+
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
     return {"status": "OK"}
 
+
 class AuthData(BaseModel):
     init_data: str
+
 
 class BuySubscriptionData(BaseModel):
     tg_id: int
     days: int
 
+
 class ExtendSubscriptionData(BaseModel):
     tg_id: int
     days: int
     email: str
+
 
 @app.post("/api/auth")
 async def auth(data: AuthData):
@@ -93,6 +100,7 @@ async def auth(data: AuthData):
     except Exception as e:
         logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
+
 
 @app.get("/api/subscriptions")
 async def get_subscriptions(tg_id: int):
@@ -113,6 +121,7 @@ async def get_subscriptions(tg_id: int):
     except Exception as e:
         logger.error(f"Error fetching subscriptions: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
+
 
 @app.post("/api/buy-subscription")
 async def buy_subscription(data: BuySubscriptionData):
@@ -142,10 +151,10 @@ async def buy_subscription(data: BuySubscriptionData):
         api.client.add(1, [new_client])
 
         pool = await init_pool(cfg.DSN)
-        
+
         await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
         await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, pool)
-        
+
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
@@ -159,6 +168,7 @@ async def buy_subscription(data: BuySubscriptionData):
     except Exception as e:
         logger.error(f"Error creating subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
+
 
 @app.post("/api/extend-subscription")
 async def extend_subscription_endpoint(data: ExtendSubscriptionData):
@@ -179,8 +189,16 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             for client in inbound.settings.clients:
                 if client.email == data.email and client.tg_id == data.tg_id:
                     extend_subscription(client.email, client.id, data.days, data.tg_id, client.sub_id, api)
+                
+                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
+                        'expiry_date']) + timedelta(days=data.days)
+
+                    pool = await init_pool(cfg.DSN)
+                    
+                    await update_subscriptions_on_db(selected_sub['email'], new_expiry, pool)
+                    await add_payment_to_db(str(data.tg_id), "111111", 'Продление', new_expiry, 89, selected_sub['email'], pool) 
+                    
                     client_found = True
-                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub['expiry_date']) + timedelta(days=data.days)
                     break
             if client_found:
                 break
