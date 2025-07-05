@@ -1,4 +1,3 @@
-import asyncpg
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
@@ -12,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from py3xui import Client
 import random
 import string
+import asyncpg
 from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
-from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, init_pool
+from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, create_trial_user, get_trial_status
 import config as cfg
 
 app = FastAPI()
+pool = None
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -34,13 +35,23 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     global pool
-    pool = await asyncpg.create_pool(cfg.DSN, min_size=2, max_size=5)
+    pool = await asyncpg.create_pool(
+        cfg.DSN,
+        min_size=2,
+        max_size=5,
+        max_inactive_connection_lifetime=300
+    )
     logger.info("Database pool initialized")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global pool
+    await pool.close()
+    logger.info("Database pool closed")
 
 def generate_sub(length=16):
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
-
 
 def verify_init_data(init_data: str) -> dict:
     try:
@@ -70,27 +81,25 @@ def verify_init_data(init_data: str) -> dict:
         logger.error(f"Error verifying initData: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
-
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
     return {"status": "OK"}
 
-
 class AuthData(BaseModel):
     init_data: str
-
 
 class BuySubscriptionData(BaseModel):
     tg_id: int
     days: int
-
 
 class ExtendSubscriptionData(BaseModel):
     tg_id: int
     days: int
     email: str
 
+class TrialSubscriptionData(BaseModel):
+    tg_id: int
 
 @app.post("/api/auth")
 async def auth(data: AuthData):
@@ -106,7 +115,6 @@ async def auth(data: AuthData):
     except Exception as e:
         logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
-
 
 @app.get("/api/subscriptions")
 async def get_subscriptions(tg_id: int):
@@ -127,7 +135,6 @@ async def get_subscriptions(tg_id: int):
     except Exception as e:
         logger.error(f"Error fetching subscriptions: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
-
 
 @app.post("/api/buy-subscription")
 async def buy_subscription(data: BuySubscriptionData):
@@ -155,10 +162,8 @@ async def buy_subscription(data: BuySubscriptionData):
         )
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
-
         await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
         await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, pool)
-
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
@@ -172,7 +177,6 @@ async def buy_subscription(data: BuySubscriptionData):
     except Exception as e:
         logger.error(f"Error creating subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
-
 
 @app.post("/api/extend-subscription")
 async def extend_subscription_endpoint(data: ExtendSubscriptionData):
@@ -193,16 +197,10 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             for client in inbound.settings.clients:
                 if client.email == data.email and client.tg_id == data.tg_id:
                     extend_subscription(client.email, client.id, data.days, data.tg_id, client.sub_id, api)
-
-                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
-                        'expiry_date']) + timedelta(days=data.days)
-                    expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
-
-                    #pool = await init_pool(cfg.DSN)
-
+                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub['expiry_date']) + timedelta(days=data.days)
+                    expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
                     await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
                     await add_payment_to_db(str(data.tg_id), "111111", 'Продление', expiry_time, 89, selected_sub['email'], pool)
-
                     client_found = True
                     break
             if client_found:
@@ -213,10 +211,52 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
         return {
             "email": data.email,
             "panel": selected_sub['panel'],
-            "expiry_date": new_expiry.strftime("%Y-%m-%d %H:%M:%S"),
+            "expiry_date": expiry_time,
             "amount": {30: 89, 90: 249, 180: 449, 360: 849}[data.days],
             "days": data.days
         }
     except Exception as e:
         logger.error(f"Error extending subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error extending subscription: {str(e)}")
+
+@app.post("/api/activate-trial")
+async def activate_trial(data: TrialSubscriptionData):
+    logger.info(f"Activating trial subscription for tg_id: {data.tg_id}")
+    try:
+        trial_status = await get_trial_status(str(data.tg_id), pool)
+        if trial_status is not None:
+            raise HTTPException(status_code=400, detail="Вы уже активировали пробную подписку")
+        email = f"DE-FRA-TRIAL-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+        current_panel = get_best_panel()
+        if not current_panel:
+            raise HTTPException(status_code=500, detail="No available panels")
+        subscription_id = generate_sub(16)
+        expiry_time = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+        new_client = Client(
+            id=str(uuid.uuid4()),
+            enable=True,
+            tg_id=data.tg_id,
+            expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
+            flow="xtls-rprx-vision",
+            email=email,
+            sub_id=subscription_id,
+            limit_ip=5
+        )
+        api = get_api_by_name(current_panel['name'])
+        api.client.add(1, [new_client])
+        await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
+        await create_trial_user(str(data.tg_id), pool)
+        subscription_key = current_panel["create_key"](new_client)
+        logger.info(f"Trial subscription created for tg_id: {data.tg_id}, email: {email}")
+        return {
+            "email": email,
+            "panel": current_panel['name'],
+            "key": subscription_key,
+            "expiry_date": expiry_time,
+            "days": 3
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error creating trial subscription: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating trial subscription: {str(e)}")
