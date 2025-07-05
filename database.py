@@ -31,6 +31,28 @@ async def add_payment_to_db(telegram_id, label, operation_type, payment_time, am
         )
         logging.info(f"Платёж добавлен: {email}")
 
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
+async def get_trial_status(tg_id, pool):
+    """Получение статуса пробного периода"""
+    async with pool.acquire() as conn:
+        result = await conn.fetchval(
+            "SELECT status FROM trials WHERE tg_id = $1", tg_id
+        )
+        return result if result is not None else None
+
+async def create_trial_user(tg_id, pool):
+    """Создание пробного пользователя"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO trials (tg_id, status) VALUES ($1, FALSE)", tg_id
+        )
+        logging.info(f"Пробный пользователь создан: tg_id={tg_id}")
+
+
+
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
 async def get_user(tg_id, dsn):
     """Получение пользователя по tg_id"""
     async with asyncpg.create_pool(dsn) as pool:
@@ -98,23 +120,7 @@ async def update_user_terms(tg_id, status, dsn):
             )
             logging.info(f"Условия обновлены: tg_id={tg_id}, status={status}")
 
-async def get_trial_status(tg_id, dsn):
-    """Получение статуса пробного периода"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            result = await conn.fetchval(
-                "SELECT status FROM trials WHERE tg_id = $1", tg_id
-            )
-            return result if result is not None else None
 
-async def create_trial_user(tg_id, dsn):
-    """Создание пробного пользователя"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO trials (tg_id, status) VALUES ($1, FALSE)", tg_id
-            )
-            logging.info(f"Пробный пользователь создан: tg_id={tg_id}")
 
 async def activate_trial(tg_id, dsn):
     """Активация пробного периода"""
