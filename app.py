@@ -1,3 +1,4 @@
+import asyncpg
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
@@ -30,6 +31,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    global pool
+    pool = await asyncpg.create_pool(cfg.DSN, max_size=5)
+    logger.info("Database pool initialized")
 
 def generate_sub(length=16):
     chars = string.ascii_lowercase + string.digits
@@ -150,8 +156,6 @@ async def buy_subscription(data: BuySubscriptionData):
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
 
-        pool = await init_pool(cfg.DSN)
-
         await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
         await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, pool)
 
@@ -194,7 +198,7 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
                         'expiry_date']) + timedelta(days=data.days)
                     expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
 
-                    pool = await init_pool(cfg.DSN)
+                    #pool = await init_pool(cfg.DSN)
 
                     await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
                     await add_payment_to_db(str(data.tg_id), "111111", 'Продление', expiry_time, 89, selected_sub['email'], pool)
