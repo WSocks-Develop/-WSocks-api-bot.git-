@@ -140,7 +140,7 @@ async def buy_subscription(data: BuySubscriptionData):
         )
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
-        await add_subscription_to_db(data.tg_id, email, current_panel['name'], expiry_time, cfg.DSN)
+        await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, cfg.DSN)
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
