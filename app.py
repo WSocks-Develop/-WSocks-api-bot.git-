@@ -12,7 +12,7 @@ from py3xui import Client
 import random
 import string
 from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
-from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db
+from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, init_pool
 import config as cfg
 
 app = FastAPI()
@@ -140,8 +140,12 @@ async def buy_subscription(data: BuySubscriptionData):
         )
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
-        await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, cfg.DSN)
-        await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, cfg.DSN)
+
+        pool = await init_pool(cfg.DSN)
+        
+        await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
+        await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, pool)
+        
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
