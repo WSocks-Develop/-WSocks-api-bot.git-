@@ -34,7 +34,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     global pool
-    pool = await asyncpg.create_pool(cfg.DSN, max_size=5)
+    pool = await asyncpg.create_pool(cfg.DSN, min_size=2, max_size=5)
     logger.info("Database pool initialized")
 
 def generate_sub(length=16):
