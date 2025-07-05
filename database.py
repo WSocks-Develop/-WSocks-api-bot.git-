@@ -39,13 +39,13 @@ async def get_trial_status(tg_id, pool):
         result = await conn.fetchval(
             "SELECT status FROM trials WHERE tg_id = $1", tg_id
         )
-        return result if result is not None else None
+        return 1 if result == 1 else 0
 
 async def create_trial_user(tg_id, pool):
     """Создание пробного пользователя"""
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO trials (tg_id, status) VALUES ($1, FALSE)", tg_id
+            "INSERT INTO trials (tg_id, status) VALUES ($1, 1)", tg_id
         )
         logging.info(f"Пробный пользователь создан: tg_id={tg_id}")
 
