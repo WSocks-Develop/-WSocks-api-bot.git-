@@ -12,6 +12,7 @@ from py3xui import Client
 import random
 import string
 from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
+from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db
 import config as cfg
 
 app = FastAPI()
@@ -126,12 +127,12 @@ async def buy_subscription(data: BuySubscriptionData):
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
         subscription_id = generate_sub(16)
-        expiry_time = datetime.now(timezone.utc) + timedelta(days=data.days)
+        expiry_time = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         new_client = Client(
             id=str(uuid.uuid4()),
             enable=True,
             tg_id=data.tg_id,
-            expiry_time=int(expiry_time.timestamp() * 1000),
+            expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
             flow="xtls-rprx-vision",
             email=email,
             sub_id=subscription_id,
@@ -139,13 +140,14 @@ async def buy_subscription(data: BuySubscriptionData):
         )
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
+        await add_subscription_to_db(data.tg_id, email, current_panel['name'], expiry_time, cfg.DSN)
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
             "email": email,
             "panel": current_panel['name'],
             "key": subscription_key,
-            "expiry_date": expiry_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "expiry_date": expiry_time,
             "amount": amount,
             "days": data.days
         }
