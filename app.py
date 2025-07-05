@@ -136,7 +136,7 @@ async def buy_subscription(data: BuySubscriptionData):
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
         subscription_id = generate_sub(16)
-        expiry_time = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+        expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
         new_client = Client(
             id=str(uuid.uuid4()),
             enable=True,
@@ -189,22 +189,23 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             for client in inbound.settings.clients:
                 if client.email == data.email and client.tg_id == data.tg_id:
                     extend_subscription(client.email, client.id, data.days, data.tg_id, client.sub_id, api)
-                
+
                     new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
                         'expiry_date']) + timedelta(days=data.days)
+                    expiry_time = (datetime.now(timezone.utc) + timedelta(days=data.days)).strftime("%Y-%m-%d %H:%M:%S")
 
                     pool = await init_pool(cfg.DSN)
-                    
-                    await update_subscriptions_on_db(selected_sub['email'], new_expiry, pool)
-                    await add_payment_to_db(str(data.tg_id), "111111", 'Продление', new_expiry, 89, selected_sub['email'], pool) 
-                    
+
+                    await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
+                    await add_payment_to_db(str(data.tg_id), "111111", 'Продление', expiry_time, 89, selected_sub['email'], pool)
+
                     client_found = True
                     break
             if client_found:
                 break
         if not client_found:
             raise HTTPException(status_code=404, detail="Client not found")
-        logger.info(f"Subscription extended for tg_id: {data.tg_id}, email: {data.email}, new_expiry: {new_expiry}")
+        logger.info(f"Subscription extended for tg_id: {data.tg_id}, email: {data.email}, new_expiry: {expiry_time}")
         return {
             "email": data.email,
             "panel": selected_sub['panel'],
