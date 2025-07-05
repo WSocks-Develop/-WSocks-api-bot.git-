@@ -127,7 +127,7 @@ async def buy_subscription(data: BuySubscriptionData):
         if not current_panel:
             raise HTTPException(status_code=500, detail="No available panels")
         subscription_id = generate_sub(16)
-        expiry_time = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        expiry_time = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         new_client = Client(
             id=str(uuid.uuid4()),
             enable=True,
@@ -141,6 +141,7 @@ async def buy_subscription(data: BuySubscriptionData):
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
         await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, cfg.DSN)
+        await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, cfg.DSN)
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
