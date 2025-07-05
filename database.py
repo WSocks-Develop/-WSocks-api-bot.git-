@@ -153,7 +153,7 @@ async def add_subscription_to_db(tg_id, email, panel, expiry_date, dsn):
     async with asyncpg.create_pool(dsn) as pool:
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO users (tg_id, email, panel, expiry_date, warn, end) VALUES ($1, $2, $3, $4, FALSE, FALSE)",
+                "INSERT INTO users (tg_id, email, panel, expiry_date, warn, ends) VALUES ($1, $2, $3, $4, 0, 0)",
                 tg_id, email, panel, expiry_date
             )
             logging.info(f"Подписка добавлена: {email}")
