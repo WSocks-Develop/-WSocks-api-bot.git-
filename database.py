@@ -1,58 +1,35 @@
-import asyncio
-
 import asyncpg
 import logging
 from datetime import datetime, timezone
 
-# Настройка логирования
+async def init_pool(dsn):
+    """Инициализация пула соединений"""
+    return await asyncpg.create_pool(dsn)
 
-async def init_db(dsn):
-    """Инициализация таблиц базы данных"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS referrals (
-                    referrer_id BIGINT,
-                    referee_id BIGINT UNIQUE,
-                    bonus_applied BOOLEAN DEFAULT FALSE,
-                    bonus_date TIMESTAMP,
-                    FOREIGN KEY (referrer_id) REFERENCES users_terms(telegram_id),
-                    FOREIGN KEY (referee_id) REFERENCES users_terms(telegram_id)
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    tg_id BIGINT,
-                    email TEXT,
-                    panel TEXT,
-                    expiry_date TIMESTAMP,
-                    warn BOOLEAN DEFAULT FALSE,
-                    end BOOLEAN DEFAULT FALSE
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users_terms (
-                    telegram_id BIGINT PRIMARY KEY,
-                    accepted_terms BOOLEAN
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS trials (
-                    tg_id BIGINT PRIMARY KEY,
-                    status BOOLEAN
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS payments (
-                    telegram_id BIGINT,
-                    label TEXT,
-                    operation_type TEXT,
-                    payment_time TIMESTAMP,
-                    amount DECIMAL,
-                    email TEXT
-                )
-            """)
-            logging.info("База данных инициализирована")
+
+async def add_subscription_to_db(tg_id, email, panel, expiry_date, pool):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users (tg_id, email, panel, expiry_date, warn, ends) VALUES ($1, $2, $3, $4, 0, 0)",
+            tg_id, email, panel, expiry_date
+        )
+        logging.info(f"Подписка добавлена: {email}")
+
+async def update_subscriptions_on_db(email, expiry_date, pool):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET expiry_date = $1, warn = FALSE, end = FALSE WHERE email = $2",
+            expiry_date, email
+        )
+        logging.info(f"Подписка обновлена: {email}")
+
+async def add_payment_to_db(telegram_id, label, operation_type, payment_time, amount, email, pool):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO payments (telegram_id, label, operation_type, payment_time, amount, email) VALUES ($1, $2, $3, $4, $5, $6)",
+            telegram_id, label, operation_type, payment_time, amount, email
+        )
+        logging.info(f"Платёж добавлен: {email}")
 
 async def get_user(tg_id, dsn):
     """Получение пользователя по tg_id"""
@@ -147,33 +124,3 @@ async def activate_trial(tg_id, dsn):
                 "UPDATE trials SET status = TRUE WHERE tg_id = $1", tg_id
             )
             logging.info(f"Пробный период активирован: tg_id={tg_id}")
-
-async def add_subscription_to_db(tg_id, email, panel, expiry_date, dsn):
-    """Добавление подписки"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO users (tg_id, email, panel, expiry_date, warn, ends) VALUES ($1, $2, $3, $4, 0, 0)",
-                tg_id, email, panel, expiry_date
-            )
-            logging.info(f"Подписка добавлена: {email}")
-
-async def update_subscriptions_on_db(email, expiry_date, dsn):
-    """Обновление подписки"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET expiry_date = $1, warn = FALSE, end = FALSE WHERE email = $2",
-                expiry_date, email
-            )
-            logging.info(f"Подписка обновлена: {email}")
-
-async def add_payment_to_db(telegram_id, label, operation_type, payment_time, amount, email, dsn):
-    """Добавление платежа"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO payments (telegram_id, label, operation_type, payment_time, amount, email) VALUES ($1, $2, $3, $4, $5, $6)",
-                telegram_id, label, operation_type, payment_time, amount, email
-            )
-            logging.info(f"Платёж добавлен: {email}")
