@@ -311,17 +311,20 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
     logger.info(f"Applying referral bonus for tg_id: {data.tg_id}, referee_id: {data.referee_id}, email: {data.email}")
     try:
         referrals = await get_referrals(str(data.tg_id), pool)
+        logger.info(f"Referrals for tg_id {data.tg_id}: {referrals}")
         referral = next((ref for ref in referrals if ref['referee_id'] == str(data.referee_id)), None)
         if not referral:
+            logger.error(f"Referral not found for tg_id: {data.tg_id}, referee_id: {data.referee_id}")
             raise HTTPException(status_code=404, detail="Referral not found")
         if referral['bonus_applied']:
             raise HTTPException(status_code=400, detail="Bonus already applied")
 
         subscriptions = get_active_subscriptions(data.tg_id)
         non_trial_subs = [sub for sub in subscriptions if not sub['email'].startswith("DE-FRA-TRIAL-")]
+        logger.info(f"Non-trial subscriptions: {non_trial_subs}")
 
         if len(non_trial_subs) == 0:
-            # Создать новую подписку на 7 дней
+            # Условие 1: Создать новую подписку на 7 дней
             email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
             current_panel = get_best_panel()
             if not current_panel:
@@ -352,8 +355,36 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                 "expiry_date": expiry_time,
                 "days": 7
             }
+        elif len(non_trial_subs) == 1:
+            # Условие 2: Автоматически продлить единственную подписку на 7 дней
+            selected_sub = non_trial_subs[0]
+            selected_email = selected_sub['email']
+            api = get_api_by_name(selected_sub['panel'])
+            client_found = False
+            inbounds = api.inbound.get_list()
+            for inbound in inbounds:
+                for client in inbound.settings.clients:
+                    if client.email == selected_email and client.tg_id == data.tg_id:
+                        extend_subscription(client.email, client.id, 7, data.tg_id, client.sub_id, api)
+                        new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub['expiry_date']) + timedelta(days=7)
+                        expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+                        await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
+                        client_found = True
+                        break
+                if client_found:
+                    break
+            if not client_found:
+                raise HTTPException(status_code=404, detail="Client not found")
+            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
+            logger.info(f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
+            return {
+                "email": selected_email,
+                "panel": selected_sub['panel'],
+                "expiry_date": expiry_time,
+                "days": 7
+            }
         else:
-            # Продлить подписку на 7 дней
+            # Условие 3: Требуется выбор подписки
             selected_email = data.email
             if not selected_email:
                 raise HTTPException(status_code=400, detail="Email required for extension")
@@ -367,8 +398,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                 for client in inbound.settings.clients:
                     if client.email == selected_email and client.tg_id == data.tg_id:
                         extend_subscription(client.email, client.id, 7, data.tg_id, client.sub_id, api)
-                        new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
-                            'expiry_date']) + timedelta(days=7)
+                        new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub['expiry_date']) + timedelta(days=7)
                         expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
                         await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
                         client_found = True
@@ -378,8 +408,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
             if not client_found:
                 raise HTTPException(status_code=404, detail="Client not found")
             await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
-            logger.info(
-                f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
+            logger.info(f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
             return {
                 "email": selected_email,
                 "panel": selected_sub['panel'],
@@ -387,5 +416,5 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                 "days": 7
             }
     except Exception as e:
-        logger.error(f"Error applying referral bonus: {e}")
+        logger.error(f"Error applying referral bonus: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error applying referral bonus: {str(e)}")
