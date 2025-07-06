@@ -15,7 +15,7 @@ import asyncpg
 import config as cfg
 from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
 from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, create_trial_user, \
-    get_trial_status, get_referrals, apply_referral_bonus
+    get_trial_status, get_referrals, apply_referral_bonus_db
 
 app = FastAPI()
 pool = None
@@ -346,7 +346,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
             await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
             await add_payment_to_db(str(data.tg_id), "REFERRAL_BONUS", 'Реферальный бонус', expiry_time, 0, email, pool)
             subscription_key = current_panel["create_key"](new_client)
-            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
+            await apply_referral_bonus_db(str(data.tg_id), str(data.referee_id), pool)
             logger.info(f"Referral bonus created subscription for tg_id: {data.tg_id}, email: {email}")
             return {
                 "email": email,
@@ -375,7 +375,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                     break
             if not client_found:
                 raise HTTPException(status_code=404, detail="Client not found")
-            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
+            await apply_referral_bonus_db(str(data.tg_id), str(data.referee_id), pool)
             logger.info(f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
             return {
                 "email": selected_email,
@@ -407,7 +407,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                     break
             if not client_found:
                 raise HTTPException(status_code=404, detail="Client not found")
-            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
+            await apply_referral_bonus_db(str(data.tg_id), str(data.referee_id), pool)
             logger.info(f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
             return {
                 "email": selected_email,
