@@ -159,7 +159,7 @@ async def get_subscriptions(tg_id: int):
 async def get_referrals_endpoint(tg_id: int):
     logger.info(f"Fetching referrals for tg_id: {tg_id}")
     try:
-        referrals = await get_referrals(tg_id, pool)
+        referrals = await get_referrals(str(tg_id), pool)
         formatted_referrals = [
             {
                 "referee_id": ref['referee_id'],
