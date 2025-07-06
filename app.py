@@ -311,7 +311,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
     logger.info(f"Applying referral bonus for tg_id: {data.tg_id}, referee_id: {data.referee_id}, email: {data.email}")
     try:
         referrals = await get_referrals(str(data.tg_id), pool)
-        referral = next((ref for ref in referrals if ref['referee_id'] == data.referee_id), None)
+        referral = next((ref for ref in referrals if ref['referee_id'] == str(data.referee_id)), None)
         if not referral:
             raise HTTPException(status_code=404, detail="Referral not found")
         if referral['bonus_applied']:
