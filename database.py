@@ -123,25 +123,6 @@ async def create_user(tg_id, dsn, referrer_id=None):
                 logging.info(f"Пользователь создан: tg_id={tg_id}")
                 print("ок")
 
-async def get_referrals(tg_id, dsn):
-    """Получение списка рефералов"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            referrals = await conn.fetch(
-                "SELECT referee_id, bonus_applied, bonus_date FROM referrals WHERE referrer_id = $1", tg_id
-            )
-            return [{'referee_id': ref['referee_id'], 'bonus_applied': ref['bonus_applied'], 'bonus_date': ref['bonus_date']} for ref in referrals]
-
-async def apply_referral_bonus(referrer_id, referee_id, dsn):
-    """Применение реферального бонуса"""
-    async with asyncpg.create_pool(dsn) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE referrals SET bonus_applied = TRUE, bonus_date = $1 WHERE referrer_id = $2 AND referee_id = $3",
-                datetime.now(timezone.utc), referrer_id, referee_id
-            )
-            logging.info(f"Бонус применён: referrer_id={referrer_id}, referee_id={referee_id}")
-
 async def has_been_referred(tg_id, dsn):
     """Проверка, был ли пользователь рефералом"""
     async with asyncpg.create_pool(dsn) as pool:
