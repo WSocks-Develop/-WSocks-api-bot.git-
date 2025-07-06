@@ -164,7 +164,7 @@ async def get_referrals_endpoint(tg_id: int):
             {
                 "referee_id": ref['referee_id'],
                 "bonus_applied": ref['bonus_applied'],
-                "bonus_date": ref['bonus_date'].strftime("%Y-%m-%d %H:%M:%S") if ref['bonus_date'] else None
+                "bonus_date": ref['bonus_date'] if ref['bonus_date'] else None
             }
             for ref in referrals
         ]
