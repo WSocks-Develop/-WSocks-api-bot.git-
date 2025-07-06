@@ -53,13 +53,24 @@ async def create_trial_user(tg_id, pool):
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 
-async def get_referrals(tg_id, pool):
-    """Получение списка рефералов"""
+async def get_referrals(tg_id: int, pool):
     async with pool.acquire() as conn:
-        referrals = await conn.fetch(
-            "SELECT referee_id, bonus_applied, bonus_date FROM referrals WHERE referrer_id = $1", tg_id
+        rows = await conn.fetch(
+            '''
+            SELECT referee_id, bonus_applied, bonus_date
+            FROM referrals
+            WHERE referrer_id = $1
+            ''',
+            tg_id
         )
-        return [{'referee_id': ref['referee_id'], 'bonus_applied': ref['bonus_applied'], 'bonus_date': ref['bonus_date']} for ref in referrals]
+        return [
+            {
+                'referee_id': row['referee_id'],
+                'bonus_applied': row['bonus_applied'],
+                'bonus_date': row['bonus_date']
+            }
+            for row in rows
+        ]
 
 
 
