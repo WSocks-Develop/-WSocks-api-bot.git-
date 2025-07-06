@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://roaring-granita-14b5a1.netlify.app", "https://telegram.org"],
+    allow_origins=["https://delicate-baklava-39dec1.netlify.app", "https://telegram.org"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
