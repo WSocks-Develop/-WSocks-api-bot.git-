@@ -53,7 +53,7 @@ async def create_trial_user(tg_id, pool):
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 
-async def get_referrals(tg_id: int, pool):
+async def get_referrals(tg_id, pool):
     async with pool.acquire() as conn:
         rows = await conn.fetchval(
             '''
