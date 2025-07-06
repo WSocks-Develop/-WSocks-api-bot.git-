@@ -12,9 +12,10 @@ from py3xui import Client
 import random
 import string
 import asyncpg
-from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
-from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, create_trial_user, get_trial_status
 import config as cfg
+from xui_utils import get_best_panel, get_api_by_name, get_active_subscriptions, extend_subscription, PANELS
+from database import add_payment_to_db, add_subscription_to_db, update_subscriptions_on_db, create_trial_user, \
+    get_trial_status, get_referrals, apply_referral_bonus
 
 app = FastAPI()
 pool = None
@@ -32,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.on_event("startup")
 async def startup_event():
     global pool
@@ -43,15 +45,18 @@ async def startup_event():
     )
     logger.info("Database pool initialized")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     global pool
     await pool.close()
     logger.info("Database pool closed")
 
+
 def generate_sub(length=16):
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
+
 
 def verify_init_data(init_data: str) -> dict:
     try:
@@ -81,25 +86,37 @@ def verify_init_data(init_data: str) -> dict:
         logger.error(f"Error verifying initData: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing initData: {str(e)}")
 
+
 @app.get("/")
 async def root():
     logger.info("Root endpoint accessed")
     return {"status": "OK"}
 
+
 class AuthData(BaseModel):
     init_data: str
+
 
 class BuySubscriptionData(BaseModel):
     tg_id: int
     days: int
+
 
 class ExtendSubscriptionData(BaseModel):
     tg_id: int
     days: int
     email: str
 
+
 class TrialSubscriptionData(BaseModel):
     tg_id: int
+
+
+class ApplyReferralBonusData(BaseModel):
+    tg_id: int
+    referee_id: int
+    email: str | None = None
+
 
 @app.post("/api/auth")
 async def auth(data: AuthData):
@@ -115,6 +132,7 @@ async def auth(data: AuthData):
     except Exception as e:
         logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
+
 
 @app.get("/api/subscriptions")
 async def get_subscriptions(tg_id: int):
@@ -136,13 +154,34 @@ async def get_subscriptions(tg_id: int):
         logger.error(f"Error fetching subscriptions: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching subscriptions: {str(e)}")
 
+
+@app.get("/api/referrals")
+async def get_referrals_endpoint(tg_id: int):
+    logger.info(f"Fetching referrals for tg_id: {tg_id}")
+    try:
+        referrals = await get_referrals(tg_id, pool)
+        formatted_referrals = [
+            {
+                "referee_id": ref['referee_id'],
+                "bonus_applied": ref['bonus_applied'],
+                "bonus_date": ref['bonus_date'].strftime("%Y-%m-%d %H:%M:%S") if ref['bonus_date'] else None
+            }
+            for ref in referrals
+        ]
+        logger.info(f"Referrals fetched: {formatted_referrals}")
+        return {"referrals": formatted_referrals}
+    except Exception as e:
+        logger.error(f"Error fetching referrals: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching referrals: {str(e)}")
+
+
 @app.post("/api/buy-subscription")
 async def buy_subscription(data: BuySubscriptionData):
     logger.info(f"Creating subscription for tg_id: {data.tg_id}, days: {data.days}")
     try:
-        if data.days not in [30, 90, 180, 360]:
+        if data.days not in [7, 30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
-        prices = {30: 89, 90: 249, 180: 449, 360: 849}
+        prices = {7: 0, 30: 89, 90: 249, 180: 449, 360: 849}
         amount = prices[data.days]
         email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
         current_panel = get_best_panel()
@@ -163,7 +202,7 @@ async def buy_subscription(data: BuySubscriptionData):
         api = get_api_by_name(current_panel['name'])
         api.client.add(1, [new_client])
         await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
-        await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, 89, email, pool)
+        await add_payment_to_db(str(data.tg_id), "111111", 'Покупка', expiry_time, amount, email, pool)
         subscription_key = current_panel["create_key"](new_client)
         logger.info(f"Subscription created for tg_id: {data.tg_id}, email: {email}")
         return {
@@ -178,11 +217,12 @@ async def buy_subscription(data: BuySubscriptionData):
         logger.error(f"Error creating subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
 
+
 @app.post("/api/extend-subscription")
 async def extend_subscription_endpoint(data: ExtendSubscriptionData):
     logger.info(f"Extending subscription for tg_id: {data.tg_id}, email: {data.email}, days: {data.days}")
     try:
-        if data.days not in [30, 90, 180, 360]:
+        if data.days not in [7, 30, 90, 180, 360]:
             raise HTTPException(status_code=400, detail="Invalid subscription period")
         subscriptions = get_active_subscriptions(data.tg_id)
         selected_sub = next((sub for sub in subscriptions if sub['email'] == data.email), None)
@@ -197,10 +237,13 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             for client in inbound.settings.clients:
                 if client.email == data.email and client.tg_id == data.tg_id:
                     extend_subscription(client.email, client.id, data.days, data.tg_id, client.sub_id, api)
-                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub['expiry_date']) + timedelta(days=data.days)
+                    new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
+                        'expiry_date']) + timedelta(days=data.days)
                     expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
                     await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
-                    await add_payment_to_db(str(data.tg_id), "111111", 'Продление', expiry_time, 89, selected_sub['email'], pool)
+                    await add_payment_to_db(str(data.tg_id), "111111", 'Продление', expiry_time,
+                                            {7: 0, 30: 89, 90: 249, 180: 449, 360: 849}[data.days],
+                                            selected_sub['email'], pool)
                     client_found = True
                     break
             if client_found:
@@ -212,12 +255,13 @@ async def extend_subscription_endpoint(data: ExtendSubscriptionData):
             "email": data.email,
             "panel": selected_sub['panel'],
             "expiry_date": expiry_time,
-            "amount": {30: 89, 90: 249, 180: 449, 360: 849}[data.days],
+            "amount": {7: 0, 30: 89, 90: 249, 180: 449, 360: 849}[data.days],
             "days": data.days
         }
     except Exception as e:
         logger.error(f"Error extending subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error extending subscription: {str(e)}")
+
 
 @app.post("/api/activate-trial")
 async def activate_trial(data: TrialSubscriptionData):
@@ -260,3 +304,90 @@ async def activate_trial(data: TrialSubscriptionData):
     except Exception as e:
         logger.error(f"Error creating trial subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating trial subscription: {str(e)}")
+
+
+@app.post("/api/apply-referral-bonus")
+async def apply_referral_bonus(data: ApplyReferralBonusData):
+    logger.info(f"Applying referral bonus for tg_id: {data.tg_id}, referee_id: {data.referee_id}, email: {data.email}")
+    try:
+        referrals = await get_referrals(data.tg_id, pool)
+        referral = next((ref for ref in referrals if ref['referee_id'] == data.referee_id), None)
+        if not referral:
+            raise HTTPException(status_code=404, detail="Referral not found")
+        if referral['bonus_applied']:
+            raise HTTPException(status_code=400, detail="Bonus already applied")
+
+        subscriptions = get_active_subscriptions(data.tg_id)
+        non_trial_subs = [sub for sub in subscriptions if not sub['email'].startswith("DE-FRA-TRIAL-")]
+
+        if len(non_trial_subs) == 0:
+            # Создать новую подписку на 7 дней
+            email = f"DE-FRA-USER-{data.tg_id}-{uuid.uuid4().hex[:6]}"
+            current_panel = get_best_panel()
+            if not current_panel:
+                raise HTTPException(status_code=500, detail="No available panels")
+            subscription_id = generate_sub(16)
+            expiry_time = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+            new_client = Client(
+                id=str(uuid.uuid4()),
+                enable=True,
+                tg_id=data.tg_id,
+                expiry_time=int(datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000),
+                flow="xtls-rprx-vision",
+                email=email,
+                sub_id=subscription_id,
+                limit_ip=5
+            )
+            api = get_api_by_name(current_panel['name'])
+            api.client.add(1, [new_client])
+            await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
+            await add_payment_to_db(str(data.tg_id), "REFERRAL_BONUS", 'Реферальный бонус', expiry_time, 0, email, pool)
+            subscription_key = current_panel["create_key"](new_client)
+            await apply_referral_bonus(data.tg_id, data.referee_id, pool)
+            logger.info(f"Referral bonus created subscription for tg_id: {data.tg_id}, email: {email}")
+            return {
+                "email": email,
+                "panel": current_panel['name'],
+                "key": subscription_key,
+                "expiry_date": expiry_time,
+                "days": 7
+            }
+        else:
+            # Продлить подписку на 7 дней
+            selected_email = data.email
+            if not selected_email:
+                raise HTTPException(status_code=400, detail="Email required for extension")
+            selected_sub = next((sub for sub in non_trial_subs if sub['email'] == selected_email), None)
+            if not selected_sub:
+                raise HTTPException(status_code=404, detail="Subscription not found")
+            api = get_api_by_name(selected_sub['panel'])
+            client_found = False
+            inbounds = api.inbound.get_list()
+            for inbound in inbounds:
+                for client in inbound.settings.clients:
+                    if client.email == selected_email and client.tg_id == data.tg_id:
+                        extend_subscription(client.email, client.id, 7, data.tg_id, client.sub_id, api)
+                        new_expiry = (datetime.now(timezone.utc) if selected_sub['is_expired'] else selected_sub[
+                            'expiry_date']) + timedelta(days=7)
+                        expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+                        await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
+                        await add_payment_to_db(str(data.tg_id), "REFERRAL_BONUS", 'Реферальный бонус', expiry_time, 0,
+                                                selected_sub['email'], pool)
+                        client_found = True
+                        break
+                if client_found:
+                    break
+            if not client_found:
+                raise HTTPException(status_code=404, detail="Client not found")
+            await apply_referral_bonus(data.tg_id, data.referee_id, pool)
+            logger.info(
+                f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
+            return {
+                "email": selected_email,
+                "panel": selected_sub['panel'],
+                "expiry_date": expiry_time,
+                "days": 7
+            }
+    except Exception as e:
+        logger.error(f"Error applying referral bonus: {e}")
+        raise HTTPException(status_code=500, detail=f"Error applying referral bonus: {str(e)}")
