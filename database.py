@@ -79,7 +79,7 @@ async def apply_referral_bonus_db(referrer_id, referee_id, pool):
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE referrals SET bonus_applied = 1, bonus_date = $1 WHERE referrer_id = $2 AND referee_id = $3",
-            datetime.now(timezone.utc), referrer_id, referee_id
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), referrer_id, referee_id
         )
         logging.info(f"Бонус применён: referrer_id={referrer_id}, referee_id={referee_id}")
 
