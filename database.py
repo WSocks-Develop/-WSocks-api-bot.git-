@@ -74,7 +74,7 @@ async def get_referrals(tg_id, pool):
 
 
 
-async def apply_referral_bonus(referrer_id, referee_id, pool):
+async def apply_referral_bonus_db(referrer_id, referee_id, pool):
     """Применение реферального бонуса"""
     async with pool.acquire() as conn:
         await conn.execute(
