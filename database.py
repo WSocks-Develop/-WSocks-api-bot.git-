@@ -53,6 +53,36 @@ async def create_trial_user(tg_id, pool):
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 
+async def get_referrals(tg_id, pool):
+    """Получение списка рефералов"""
+    async with pool.acquire() as conn:
+        referrals = await conn.fetch(
+            "SELECT referee_id, bonus_applied, bonus_date FROM referrals WHERE referrer_id = $1", tg_id
+        )
+        return [{'referee_id': ref['referee_id'], 'bonus_applied': ref['bonus_applied'], 'bonus_date': ref['bonus_date']} for ref in referrals]
+
+
+
+async def apply_referral_bonus(referrer_id, referee_id, pool):
+    """Применение реферального бонуса"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE referrals SET bonus_applied = 1, bonus_date = $1 WHERE referrer_id = $2 AND referee_id = $3",
+            datetime.now(timezone.utc), referrer_id, referee_id
+        )
+        logging.info(f"Бонус применён: referrer_id={referrer_id}, referee_id={referee_id}")
+
+
+
+
+
+
+
+
+
+
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
 async def get_user(tg_id, dsn):
     """Получение пользователя по tg_id"""
     async with asyncpg.create_pool(dsn) as pool:
