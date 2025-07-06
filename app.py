@@ -310,7 +310,7 @@ async def activate_trial(data: TrialSubscriptionData):
 async def apply_referral_bonus(data: ApplyReferralBonusData):
     logger.info(f"Applying referral bonus for tg_id: {data.tg_id}, referee_id: {data.referee_id}, email: {data.email}")
     try:
-        referrals = await get_referrals(data.tg_id, pool)
+        referrals = await get_referrals(str(data.tg_id), pool)
         referral = next((ref for ref in referrals if ref['referee_id'] == data.referee_id), None)
         if not referral:
             raise HTTPException(status_code=404, detail="Referral not found")
@@ -343,7 +343,7 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
             await add_subscription_to_db(str(data.tg_id), email, current_panel['name'], expiry_time, pool)
             await add_payment_to_db(str(data.tg_id), "REFERRAL_BONUS", 'Реферальный бонус', expiry_time, 0, email, pool)
             subscription_key = current_panel["create_key"](new_client)
-            await apply_referral_bonus(data.tg_id, data.referee_id, pool)
+            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
             logger.info(f"Referral bonus created subscription for tg_id: {data.tg_id}, email: {email}")
             return {
                 "email": email,
@@ -371,15 +371,13 @@ async def apply_referral_bonus(data: ApplyReferralBonusData):
                             'expiry_date']) + timedelta(days=7)
                         expiry_time = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
                         await update_subscriptions_on_db(selected_sub['email'], expiry_time, pool)
-                        await add_payment_to_db(str(data.tg_id), "REFERRAL_BONUS", 'Реферальный бонус', expiry_time, 0,
-                                                selected_sub['email'], pool)
                         client_found = True
                         break
                 if client_found:
                     break
             if not client_found:
                 raise HTTPException(status_code=404, detail="Client not found")
-            await apply_referral_bonus(data.tg_id, data.referee_id, pool)
+            await apply_referral_bonus(str(data.tg_id), str(data.referee_id), pool)
             logger.info(
                 f"Referral bonus extended subscription for tg_id: {data.tg_id}, email: {selected_email}, new_expiry: {expiry_time}")
             return {
